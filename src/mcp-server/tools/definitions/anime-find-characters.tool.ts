@@ -39,10 +39,12 @@ export const animeFindCharacters = tool('anime_find_characters', {
       ),
     character_name: z
       .string()
+      .max(200)
       .optional()
       .describe("Character name to search for. Returns the character's appearances across media."),
     voice_actor_name: z
       .string()
+      .max(200)
       .optional()
       .describe('Voice actor/staff name to search for. Returns their roles across anime.'),
     language: z

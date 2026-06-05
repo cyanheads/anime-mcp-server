@@ -30,12 +30,17 @@ export const animeSearchMedia = tool('anime_search_media', {
 
   input: z.object({
     media_type: MediaTypeEnum,
-    query: z.string().optional().describe('Title search query. Supports partial matches.'),
+    query: z.string().max(200).optional().describe('Title search query. Supports partial matches.'),
     genre: z
       .string()
+      .max(100)
       .optional()
       .describe('Genre filter, e.g. "Action", "Romance", "Slice of Life".'),
-    tag: z.string().optional().describe('Tag filter, e.g. "Isekai", "Mecha", "School Life".'),
+    tag: z
+      .string()
+      .max(100)
+      .optional()
+      .describe('Tag filter, e.g. "Isekai", "Mecha", "School Life".'),
     season: SeasonEnum.optional(),
     season_year: z
       .number()
@@ -47,7 +52,10 @@ export const animeSearchMedia = tool('anime_search_media', {
     format: FormatEnum.optional(),
     status: StatusEnum.optional(),
     sort: z
-      .array(z.string().describe('A sort field string, e.g. "SCORE_DESC" or "POPULARITY_DESC".'))
+      .array(
+        z.string().max(50).describe('A sort field string, e.g. "SCORE_DESC" or "POPULARITY_DESC".'),
+      )
+      .max(5)
       .optional()
       .describe(
         'Sort order list. Common values: SEARCH_MATCH (default), SCORE_DESC, POPULARITY_DESC, TRENDING_DESC, START_DATE_DESC.',

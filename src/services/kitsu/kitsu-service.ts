@@ -85,6 +85,10 @@ async function findKitsuAnimeId(malId: number): Promise<string | null> {
  * Returns empty array on failure (supplement service — degrades gracefully).
  */
 async function getStreamingLinks(kitsuId: string): Promise<KitsuStreamingLink[]> {
+  // Guard: Kitsu IDs are numeric strings (e.g. "7442"). Reject anything that would
+  // escape the path segment (traversal, scheme injection) via a malformed API response.
+  if (!/^\d+$/.test(kitsuId)) return [];
+
   const result = await get<{
     data: { id: string; type: string };
     included?: Array<{

@@ -18,6 +18,7 @@ export const animeGetStudio = tool('anime_get_studio', {
   input: z.object({
     name: z
       .string()
+      .max(200)
       .optional()
       .describe('Studio name to search for, e.g. "MAPPA", "Kyoto Animation", "ufotable".'),
     id: z

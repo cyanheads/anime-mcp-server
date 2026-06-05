@@ -23,6 +23,7 @@ export const animeGetRecommendations = tool('anime_get_recommendations', {
       .describe('AniList media ID of the title to get recommendations for.'),
     liked_aspects: z
       .string()
+      .max(500)
       .optional()
       .describe(
         'Optional: what you liked about this title (e.g. "the slow-burn romance" or "mecha action"). ' +

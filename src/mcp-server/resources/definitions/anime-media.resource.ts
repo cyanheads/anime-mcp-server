@@ -49,7 +49,7 @@ export const animeMediaResource = resource('anime://media/{id}', {
 
   async handler(params, ctx) {
     const numericId = parseInt(params.id, 10);
-    if (isNaN(numericId) || numericId < 1) {
+    if (Number.isNaN(numericId) || numericId < 1) {
       throw notFound(`Invalid AniList media ID: ${params.id}`);
     }
 

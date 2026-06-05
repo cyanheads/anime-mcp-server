@@ -32,7 +32,7 @@ export const animeGetRankings = tool('anime_get_rankings', {
       ),
     media_type: z.enum(['ANIME', 'MANGA']).describe('Media type to rank.'),
     format: FormatEnum.optional(),
-    genre: z.string().optional().describe('Genre filter, e.g. "Action", "Romance".'),
+    genre: z.string().max(100).optional().describe('Genre filter, e.g. "Action", "Romance".'),
     season: SeasonEnum.optional().describe(
       'Season for "seasonal" mode. Defaults to current season.',
     ),
