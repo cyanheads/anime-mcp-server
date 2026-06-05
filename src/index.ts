@@ -1,21 +1,26 @@
 #!/usr/bin/env node
 /**
  * @fileoverview anime-mcp-server MCP server entry point.
+ * Multi-source anime and manga server over AniList GraphQL, Jikan v4, and Kitsu JSON:API.
  * @module index
  */
 
 import { createApp } from '@cyanheads/mcp-ts-core';
-import { echoPrompt } from './mcp-server/prompts/definitions/echo.prompt.js';
-import { echoResource } from './mcp-server/resources/definitions/echo.resource.js';
-import { echoAppUiResource } from './mcp-server/resources/definitions/echo-app-ui.app-resource.js';
-import { echoTool } from './mcp-server/tools/definitions/echo.tool.js';
-import { echoAppTool } from './mcp-server/tools/definitions/echo-app.app-tool.js';
+import { allPromptDefinitions } from './mcp-server/prompts/index.js';
+import { allResourceDefinitions } from './mcp-server/resources/index.js';
+import { allToolDefinitions } from './mcp-server/tools/index.js';
 
 await createApp({
-  tools: [echoTool, echoAppTool],
-  resources: [echoResource, echoAppUiResource],
-  prompts: [echoPrompt],
-  // instructions: 'Server-level orientation forwarded to the model on every initialize.\n' +
-  //   '- Use shortcut `X` for the most common case\n' +
-  //   '- Tools require auth via the `inventory:read` scope',
+  tools: allToolDefinitions,
+  resources: allResourceDefinitions,
+  prompts: allPromptDefinitions,
+  instructions:
+    'Anime and manga data from AniList, MAL (via Jikan), and Kitsu.\n' +
+    '- Use anime_search_media to discover AniList IDs, then anime_get_media for full detail.\n' +
+    '- Use anime_get_relations to build watch/read order for a franchise.\n' +
+    '- Use anime_get_schedule for seasonal airing schedules or upcoming episodes.\n' +
+    '- Use anime_find_characters for cast lookup or voice actor role search.\n' +
+    '- Scores: AniList and MAL scores are surfaced separately — never blended.\n' +
+    '- Adult content: off by default; opt in via include_adult: true.\n' +
+    '- Rate limits: AniList 30 req/30s, Jikan ~3 req/sec. Service layer handles backoff automatically.',
 });
