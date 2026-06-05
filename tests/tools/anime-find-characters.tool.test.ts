@@ -36,6 +36,23 @@ const mockCharacterEdges = {
   hasNextPage: false,
 };
 
+const mockMediaNode = {
+  id: 11757,
+  idMal: 9253,
+  type: 'ANIME' as const,
+  format: 'TV',
+  status: 'FINISHED',
+  season: null,
+  seasonYear: null,
+  episodes: 25,
+  chapters: null,
+  volumes: null,
+  meanScore: 90,
+  isAdult: false,
+  title: { romaji: 'Steins;Gate', english: 'Steins;Gate', native: null },
+  coverImage: null,
+};
+
 const mockCharacterWithMedia = {
   id: 40882,
   name: { full: 'Okabe Rintarou', native: '岡部倫太郎' },
@@ -44,8 +61,21 @@ const mockCharacterWithMedia = {
   siteUrl: 'https://anilist.co/character/40882',
   media: {
     pageInfo: { hasNextPage: false, currentPage: 1 },
-    nodes: [],
-    edges: [],
+    nodes: [mockMediaNode],
+    edges: [
+      {
+        characterRole: 'MAIN' as const,
+        voiceActors: [
+          {
+            id: 95061,
+            name: { full: 'Mamoru Miyano', native: '宮野真守' },
+            language: 'JAPANESE' as const,
+            image: { large: 'https://example.com/miyano.jpg', medium: null },
+            siteUrl: 'https://anilist.co/staff/95061',
+          },
+        ],
+      },
+    ],
   },
 };
 
@@ -113,6 +143,21 @@ describe('animeFindCharacters', () => {
     expect(result.mode).toBe('by_character');
     expect(result.characters[0]!.character_id).toBe(40882);
     expect(vi.mocked(anilist.searchCharacter)).toHaveBeenCalledWith('Okabe');
+  });
+
+  it('by_character mode maps media appearances with VAs from edges', async () => {
+    vi.mocked(anilist.searchCharacter).mockResolvedValue(mockCharacterWithMedia);
+    const ctx = createMockContext({ errors: animeFindCharacters.errors });
+    const input = animeFindCharacters.input.parse({ character_name: 'Okabe' });
+
+    const result = await animeFindCharacters.handler(input, ctx);
+
+    // One appearance per media node
+    expect(result.characters).toHaveLength(1);
+    expect(result.characters[0]!.role).toBe('MAIN');
+    // VAs from corresponding edge
+    expect(result.characters[0]!.voice_actors).toHaveLength(1);
+    expect(result.characters[0]!.voice_actors[0]!.va_name).toBe('Mamoru Miyano');
   });
 
   it('returns VA detail in by_voice_actor mode when voice_actor_name is provided', async () => {

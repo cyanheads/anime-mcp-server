@@ -135,6 +135,48 @@ describe('animeGetRelations', () => {
     expect(uniqueIds.size).toBe(ids.length);
   });
 
+  it('reports correct depth_reached when traversal goes to max_depth', async () => {
+    // Root → sequel at depth 1; sequel has no further relations
+    vi.mocked(anilist.getMediaRelations)
+      .mockResolvedValueOnce(sequelEdges) // root at depth 0
+      .mockResolvedValueOnce([]); // sequel at depth 1 — no children
+    vi.mocked(anilist.getMediaById).mockResolvedValue(rootNode as any);
+
+    const ctx = createMockContext({ errors: animeGetRelations.errors });
+    const input = animeGetRelations.input.parse({ id: 11757, max_depth: 1 });
+    const result = await animeGetRelations.handler(input, ctx);
+
+    // BFS must dequeue the sequel (depth 1), so depth_reached should be 1
+    expect(result.depth_reached).toBe(1);
+    expect(result.total_entries).toBe(2);
+  });
+
+  it('traverses multiple hops and includes grandchildren', async () => {
+    const grandchildNode = {
+      ...sequelNode,
+      id: 99001,
+      title: { romaji: 'Steins;Gate 0 Movie', english: null, native: null },
+    };
+    const grandchildEdges = [{ relationType: 'SEQUEL' as const, node: grandchildNode }];
+
+    vi.mocked(anilist.getMediaRelations)
+      .mockResolvedValueOnce(sequelEdges) // root at depth 0
+      .mockResolvedValueOnce(grandchildEdges) // sequel at depth 1 → grandchild
+      .mockResolvedValueOnce([]); // grandchild at depth 2 — no children
+    vi.mocked(anilist.getMediaById).mockResolvedValue(rootNode as any);
+
+    const ctx = createMockContext({ errors: animeGetRelations.errors });
+    const input = animeGetRelations.input.parse({ id: 11757, max_depth: 2 });
+    const result = await animeGetRelations.handler(input, ctx);
+
+    expect(result.depth_reached).toBe(2);
+    expect(result.total_entries).toBe(3);
+    const ids = result.entries.map((e) => e.id);
+    expect(ids).toContain(11757);
+    expect(ids).toContain(14247);
+    expect(ids).toContain(99001);
+  });
+
   it('formats output with watch order labels and AniList IDs', async () => {
     vi.mocked(anilist.getMediaRelations).mockResolvedValueOnce(sequelEdges).mockResolvedValue([]);
     vi.mocked(anilist.getMediaById).mockResolvedValue(rootNode as any);

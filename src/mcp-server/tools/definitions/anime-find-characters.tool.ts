@@ -208,21 +208,51 @@ export const animeFindCharacters = tool('anime_find_characters', {
         throw ctx.fail('not_found', `No character found matching "${input.character_name}"`);
       }
 
+      // Map each media appearance as a character entry so the agent can see
+      // which titles the character appears in and their VAs per appearance.
+      const appearances = character.media.nodes.map((_media, i) => {
+        const edge = character.media.edges[i];
+        return {
+          character_id: character.id,
+          character_name: character.name.full,
+          character_name_native: character.name.native,
+          role: edge?.characterRole ?? 'SUPPORTING',
+          character_image_url: character.image?.large ?? null,
+          character_site_url: character.siteUrl ?? null,
+          // Attach media context via voice_actors reuse: each "va" entry here is
+          // a VA for this character in this specific media.
+          voice_actors: (edge?.voiceActors ?? []).map((va) => ({
+            va_id: va.id,
+            va_name: va.name.full,
+            va_name_native: va.name.native,
+            language: va.language ?? null,
+            va_image_url: va.image?.large ?? null,
+            va_site_url: va.siteUrl ?? null,
+          })),
+        };
+      });
+
+      // If no appearances mapped (edge/node mismatch), fall back to single entry
+      const characters =
+        appearances.length > 0
+          ? appearances
+          : [
+              {
+                character_id: character.id,
+                character_name: character.name.full,
+                character_name_native: character.name.native,
+                role: 'SUPPORTING',
+                character_image_url: character.image?.large ?? null,
+                character_site_url: character.siteUrl ?? null,
+                voice_actors: [],
+              },
+            ];
+
       return {
         mode: 'by_character' as const,
         media_id: null,
         has_next_page: character.media.pageInfo.hasNextPage,
-        characters: [
-          {
-            character_id: character.id,
-            character_name: character.name.full,
-            character_name_native: character.name.native,
-            role: 'MAIN', // Name search returns the character node itself
-            character_image_url: character.image?.large ?? null,
-            character_site_url: character.siteUrl ?? null,
-            voice_actors: [],
-          },
-        ],
+        characters,
         voice_actor: null,
       };
     }
@@ -284,19 +314,24 @@ export const animeFindCharacters = tool('anime_find_characters', {
         }
       }
     } else if (result.mode === 'by_character') {
-      const c = result.characters[0];
-      if (!c) {
+      if (result.characters.length === 0) {
         lines.push('No character found.');
         return [{ type: 'text', text: lines.join('\n') }];
       }
+      const first = result.characters[0]!;
       lines.push(
-        `## ${c.character_name ?? 'Unknown'} (${c.character_name_native ?? '?'}) [char_id:${c.character_id}] [${c.role}]`,
-        `image: ${c.character_image_url ?? 'none'} | site: ${c.character_site_url ?? 'none'}`,
+        `## ${first.character_name ?? 'Unknown'} (${first.character_name_native ?? '?'}) [char_id:${first.character_id}]`,
+        `image: ${first.character_image_url ?? 'none'} | site: ${first.character_site_url ?? 'none'}`,
+        '',
+        `**Appears in ${result.characters.length} title(s):**`,
       );
-      for (const v of c.voice_actors) {
-        lines.push(
-          `VA: ${v.va_name ?? '?'} (${v.va_name_native ?? '?'}) (${v.language ?? '?'}) [va_id:${v.va_id}] image:${v.va_image_url ?? 'none'} site:${v.va_site_url ?? 'none'}`,
-        );
+      for (const c of result.characters) {
+        lines.push(`  [${c.role}] char_id:${c.character_id}`);
+        for (const v of c.voice_actors) {
+          lines.push(
+            `    VA: ${v.va_name ?? '?'} (${v.va_name_native ?? '?'}) (${v.language ?? '?'}) [va_id:${v.va_id}] image:${v.va_image_url ?? 'none'} site:${v.va_site_url ?? 'none'}`,
+          );
+        }
       }
     } else if (result.mode === 'by_voice_actor') {
       const va = result.voice_actor;

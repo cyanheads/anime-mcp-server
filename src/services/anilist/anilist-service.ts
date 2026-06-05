@@ -5,7 +5,7 @@
  * @module services/anilist/anilist-service
  */
 
-import { serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, McpError, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import { fetchWithTimeout, requestContextService, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import type {
   AiringSchedule,
@@ -71,11 +71,15 @@ async function query<T>(gql: string, variables: Record<string, unknown>): Promis
         body: JSON.stringify({ query: gql, variables }),
       });
 
-      if (!resp.ok && resp.status !== 200) {
-        if (resp.status === 429) {
-          // Back off the full 30s window
-          await new Promise((r) => setTimeout(r, 30_000));
-        }
+      if (resp.status === 429) {
+        // Back off the full 30s window
+        await new Promise((r) => setTimeout(r, 30_000));
+        throw serviceUnavailable('AniList rate limit exceeded', { status: 429 });
+      }
+
+      // AniList sends 404 with data.{entity}: null for nonexistent IDs — read the body
+      // before deciding whether to treat it as an error.
+      if (!resp.ok && resp.status !== 200 && resp.status !== 404) {
         throw serviceUnavailable(`AniList returned HTTP ${resp.status}`, { status: resp.status });
       }
 
@@ -84,7 +88,9 @@ async function query<T>(gql: string, variables: Record<string, unknown>): Promis
         errors?: Array<{ message: string; status: number }>;
       };
 
-      // AniList returns HTTP 200 even on GraphQL errors
+      // AniList returns HTTP 200 (or 404) even on GraphQL errors.
+      // When data is present (e.g. data.Media: null on not-found), return it so
+      // callers can check for null and throw the appropriate domain error.
       if (json.errors?.length && !json.data) {
         const firstErr = json.errors[0];
         throw serviceUnavailable(`AniList GraphQL error: ${firstErr?.message ?? 'unknown'}`, {
@@ -191,12 +197,19 @@ export async function getMediaById(id: number, includeAdult = false): Promise<Me
     }
   `;
 
-  const data = await query<{ Media: MediaDetail | null }>(gql, {
-    id,
-    isAdult: includeAdult ? undefined : false,
-  });
-
-  return data.Media;
+  try {
+    const data = await query<{ Media: MediaDetail | null }>(gql, {
+      id,
+      isAdult: includeAdult ? undefined : false,
+    });
+    return data.Media;
+  } catch (err) {
+    // AniList sends HTTP 404 for nonexistent IDs — fetchWithTimeout converts this to
+    // a NotFound McpError before we can read the body. Translate to null so callers
+    // can throw the appropriate domain error.
+    if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound) return null;
+    throw err;
+  }
 }
 
 /** Get relation edges for a media entry (one hop). Returns null if not found. */
@@ -210,10 +223,15 @@ export async function getMediaRelations(id: number): Promise<MediaRelationEdge[]
     }
   `;
 
-  const data = await query<{
-    Media: { id: number; relations: { edges: MediaRelationEdge[] } } | null;
-  }>(gql, { id });
-  return data.Media?.relations.edges ?? null;
+  try {
+    const data = await query<{
+      Media: { id: number; relations: { edges: MediaRelationEdge[] } } | null;
+    }>(gql, { id });
+    return data.Media?.relations.edges ?? null;
+  } catch (err) {
+    if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound) return null;
+    throw err;
+  }
 }
 
 /** Get seasonal airing schedule. */
@@ -324,26 +342,32 @@ export async function getMediaCharacters(params: {
     }
   `;
 
-  const data = await query<{
-    Media: {
-      characters: {
-        pageInfo: { hasNextPage: boolean };
-        edges: CharacterEdge[];
-      };
-    } | null;
-  }>(gql, {
-    id: params.mediaId,
-    language: params.language || undefined,
-    page: params.page ?? 1,
-    perPage: Math.min(params.perPage ?? 25, 25),
-  });
+  try {
+    const data = await query<{
+      Media: {
+        characters: {
+          pageInfo: { hasNextPage: boolean };
+          edges: CharacterEdge[];
+        };
+      } | null;
+    }>(gql, {
+      id: params.mediaId,
+      language: params.language || undefined,
+      page: params.page ?? 1,
+      perPage: Math.min(params.perPage ?? 25, 25),
+    });
 
-  if (!data.Media) return { characters: [], hasNextPage: false };
+    if (!data.Media) return { characters: [], hasNextPage: false };
 
-  return {
-    characters: data.Media.characters.edges,
-    hasNextPage: data.Media.characters.pageInfo.hasNextPage,
-  };
+    return {
+      characters: data.Media.characters.edges,
+      hasNextPage: data.Media.characters.pageInfo.hasNextPage,
+    };
+  } catch (err) {
+    if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound)
+      return { characters: [], hasNextPage: false };
+    throw err;
+  }
 }
 
 /** Search for a character by name. */
@@ -370,13 +394,17 @@ export async function searchCharacter(name: string): Promise<CharacterWithMedia 
     }
   `;
 
-  const data = await query<{ Character: CharacterWithMedia | null }>(gql, {
-    search: name,
-    page: 1,
-    perPage: 10,
-  });
-
-  return data.Character;
+  try {
+    const data = await query<{ Character: CharacterWithMedia | null }>(gql, {
+      search: name,
+      page: 1,
+      perPage: 10,
+    });
+    return data.Character;
+  } catch (err) {
+    if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound) return null;
+    throw err;
+  }
 }
 
 /** Search for a voice actor (staff) by name. */
@@ -406,8 +434,17 @@ export async function searchStaff(
     }
   `;
 
-  const data = await query<{ Staff: StaffWithRoles | null }>(gql, { search: name, page, perPage });
-  return data.Staff;
+  try {
+    const data = await query<{ Staff: StaffWithRoles | null }>(gql, {
+      search: name,
+      page,
+      perPage,
+    });
+    return data.Staff;
+  } catch (err) {
+    if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound) return null;
+    throw err;
+  }
 }
 
 /** Get recommendations for a media entry. */
@@ -431,26 +468,32 @@ export async function getRecommendations(params: {
     }
   `;
 
-  const data = await query<{
-    Media: {
-      idMal: number | null;
-      recommendations: {
-        pageInfo: { hasNextPage: boolean };
-        nodes: RecommendationNode[];
-      };
-    } | null;
-  }>(gql, {
-    id: params.mediaId,
-    page: params.page ?? 1,
-    perPage: Math.min(params.perPage ?? 25, 25),
-  });
+  try {
+    const data = await query<{
+      Media: {
+        idMal: number | null;
+        recommendations: {
+          pageInfo: { hasNextPage: boolean };
+          nodes: RecommendationNode[];
+        };
+      } | null;
+    }>(gql, {
+      id: params.mediaId,
+      page: params.page ?? 1,
+      perPage: Math.min(params.perPage ?? 25, 25),
+    });
 
-  if (!data.Media) return { nodes: [], hasNextPage: false };
+    if (!data.Media) return { nodes: [], hasNextPage: false };
 
-  return {
-    nodes: data.Media.recommendations.nodes,
-    hasNextPage: data.Media.recommendations.pageInfo.hasNextPage,
-  };
+    return {
+      nodes: data.Media.recommendations.nodes,
+      hasNextPage: data.Media.recommendations.pageInfo.hasNextPage,
+    };
+  } catch (err) {
+    if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound)
+      return { nodes: [], hasNextPage: false };
+    throw err;
+  }
 }
 
 /** Get rankings by mode: top, trending, or seasonal. */
@@ -540,14 +583,18 @@ export async function searchStudio(params: {
     }
   `;
 
-  const data = await query<{ Studio: StudioDetail | null }>(gql, {
-    search: params.name,
-    mediaSort: params.sort ? [params.sort] : ['POPULARITY_DESC'],
-    page: params.page ?? 1,
-    perPage: Math.min(params.perPage ?? 25, 50),
-  });
-
-  return data.Studio;
+  try {
+    const data = await query<{ Studio: StudioDetail | null }>(gql, {
+      search: params.name,
+      mediaSort: params.sort ? [params.sort] : ['POPULARITY_DESC'],
+      page: params.page ?? 1,
+      perPage: Math.min(params.perPage ?? 25, 50),
+    });
+    return data.Studio;
+  } catch (err) {
+    if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound) return null;
+    throw err;
+  }
 }
 
 /** Get studio by AniList ID. */
@@ -569,12 +616,16 @@ export async function getStudioById(params: {
     }
   `;
 
-  const data = await query<{ Studio: StudioDetail | null }>(gql, {
-    id: params.id,
-    mediaSort: params.sort ? [params.sort] : ['POPULARITY_DESC'],
-    page: params.page ?? 1,
-    perPage: Math.min(params.perPage ?? 25, 50),
-  });
-
-  return data.Studio;
+  try {
+    const data = await query<{ Studio: StudioDetail | null }>(gql, {
+      id: params.id,
+      mediaSort: params.sort ? [params.sort] : ['POPULARITY_DESC'],
+      page: params.page ?? 1,
+      perPage: Math.min(params.perPage ?? 25, 50),
+    });
+    return data.Studio;
+  } catch (err) {
+    if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound) return null;
+    throw err;
+  }
 }

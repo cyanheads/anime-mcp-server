@@ -125,15 +125,18 @@ export const animeGetRelations = tool('anime_get_relations', {
       depth: number;
     };
 
+    // `enqueued` prevents duplicate BFS queue entries. `visited` is the result map —
+    // populated as each node is discovered (from parent edge data) and updated with
+    // the correct depth as traversal proceeds.
+    const enqueued = new Set<number>([input.id]);
     const visited = new Map<number, VisitedEntry>();
     let maxDepthReached = 0;
 
-    // BFS queue: items to fetch relations for
+    // BFS queue: items whose relations we still need to fetch
     const toVisit: Array<{ id: number; depth: number }> = [{ id: input.id, depth: 0 }];
 
     while (toVisit.length > 0) {
       const item = toVisit.shift()!;
-      if (visited.has(item.id)) continue;
       if (item.depth > input.max_depth) continue;
 
       maxDepthReached = Math.max(maxDepthReached, item.depth);
@@ -162,7 +165,8 @@ export const animeGetRelations = tool('anime_get_relations', {
       // Process edges: register unseen nodes and enqueue for further traversal
       for (const edge of edges) {
         const childId = edge.node.id;
-        if (!visited.has(childId)) {
+        if (!enqueued.has(childId)) {
+          enqueued.add(childId);
           visited.set(childId, {
             node: edge.node,
             relationType: edge.relationType,
