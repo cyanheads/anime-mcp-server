@@ -107,15 +107,14 @@ export const animeGetRecommendations = tool('anime_get_recommendations', {
     const idMal = mediaDetail?.idMal ?? null;
     const mediaType: MediaType = mediaDetail?.type ?? 'ANIME';
 
-    // Fan out to Jikan in parallel (supplement)
-    const [jikanResult] = await Promise.allSettled([
-      idMal ? jikan.getRecommendations(idMal, mediaType) : Promise.resolve([]),
-    ]);
-
-    const jikanRecs = jikanResult.status === 'fulfilled' ? jikanResult.value : [];
-
-    if (jikanResult.status === 'rejected') {
-      ctx.log.warning('Jikan recommendations failed', { error: String(jikanResult.reason) });
+    // Fetch Jikan recs (supplement — degrades gracefully)
+    let jikanRecs: Awaited<ReturnType<typeof jikan.getRecommendations>> = [];
+    if (idMal) {
+      try {
+        jikanRecs = await jikan.getRecommendations(idMal, mediaType);
+      } catch (err) {
+        ctx.log.warning('Jikan recommendations failed', { error: String(err) });
+      }
     }
 
     // Build Jikan vote map keyed by MAL ID

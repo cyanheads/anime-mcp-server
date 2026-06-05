@@ -14,13 +14,12 @@ await createApp({
   tools: allToolDefinitions,
   resources: allResourceDefinitions,
   prompts: allPromptDefinitions,
-  instructions:
-    'Anime and manga data from AniList, MAL (via Jikan), and Kitsu.\n' +
-    '- Use anime_search_media to discover AniList IDs, then anime_get_media for full detail.\n' +
-    '- Use anime_get_relations to build watch/read order for a franchise.\n' +
-    '- Use anime_get_schedule for seasonal airing schedules or upcoming episodes.\n' +
-    '- Use anime_find_characters for cast lookup or voice actor role search.\n' +
-    '- Scores: AniList and MAL scores are surfaced separately — never blended.\n' +
-    '- Adult content: off by default; opt in via include_adult: true.\n' +
-    '- Rate limits: AniList 30 req/30s, Jikan ~3 req/sec. Service layer handles backoff automatically.',
+  instructions: `Anime and manga data from AniList, MAL (via Jikan), and Kitsu.
+- Use anime_search_media to discover AniList IDs, then anime_get_media for full detail.
+- Use anime_get_relations to build watch/read order for a franchise.
+- Use anime_get_schedule for seasonal airing schedules or upcoming episodes.
+- Use anime_find_characters for cast lookup or voice actor role search.
+- Scores: AniList and MAL scores are surfaced separately — never blended.
+- Adult content: off by default; opt in via include_adult: true.
+- Rate limits: AniList 30 req/30s, Jikan ~3 req/sec. Service layer handles backoff automatically.`,
 });
