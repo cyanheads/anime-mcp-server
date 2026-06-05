@@ -2,8 +2,14 @@
   "manifest_version": "0.3",
   "name": "anime-mcp-server",
   "version": "0.1.0",
-  "description": "",
-  "author": { "name": "" },
+  "description": "Search anime/manga, franchise watch order, schedule, characters, rankings, studio filmography.",
+  "author": { "name": "cyanheads" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cyanheads/anime-mcp-server"
+  },
+  "homepage": "https://github.com/cyanheads/anime-mcp-server#readme",
+  "license": "Apache-2.0",
   "server": {
     "type": "node",
     "entry_point": "dist/index.js",

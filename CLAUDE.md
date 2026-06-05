@@ -11,19 +11,6 @@
 
 ---
 
-## First Session
-
-This project was just scaffolded with `bunx @cyanheads/mcp-ts-core init`. You're holding a production-grade MCP framework with the hard parts already solved — error handling, telemetry, auth, transport, validation, lifecycle. What's missing is the **domain**. Your job: design the tool, resource, and service surface with the user, then implement it as small pure handlers that throw — the framework catches, classifies, and instruments the rest. Design before code; the user's first messages set direction, so wait for them before scaffolding definitions.
-
-> **Remove this section** from CLAUDE.md / AGENTS.md after completing these steps. The skills and conventions below remain — this block is one-time onboarding only.
-
-1. **Get your bearings.** Take stock of the project tree, the skills in `skills/`, and the tools/MCP servers available. Light tool use is fine for context-building — you're mapping the territory, not committing yet.
-2. **Read the framework docs** — `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` (builders, Context, errors, exports, conventions)
-3. **Run the `setup` skill** — read `skills/setup/SKILL.md` and follow its checklist (project orientation, agent protocol file selection, echo definition cleanup, skill sync)
-4. **Design the server** — read `skills/design-mcp-server/SKILL.md` and work through it with the user to map the domain into tools, resources, and services before scaffolding
-
----
-
 ## What's Next?
 
 When the user asks what's next or needs direction, suggest options based on the current project state. Common next steps:
@@ -60,35 +47,32 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 
 ```ts
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import * as anilist from '@/services/anilist/anilist-service.js';
 
-export const searchItems = tool('search_items', {
-  description: 'Search inventory items by query.',
-  annotations: { readOnlyHint: true },
+export const animeGetRankings = tool('anime_get_rankings', {
+  description: 'Top, trending, or seasonal rankings for anime or manga.',
+  annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
-    query: z.string().describe('Search terms'),
-    limit: z.number().default(10).describe('Max results'),
+    mode: z.enum(['top', 'trending', 'seasonal']).describe('Ranking mode.'),
+    media_type: z.enum(['ANIME', 'MANGA']).default('ANIME').describe('Media type.'),
+    page: z.number().int().default(1).describe('Page number.'),
+    per_page: z.number().int().default(20).describe('Results per page.'),
   }),
   output: z.object({
-    items: z.array(z.object({
-      id: z.string().describe('Item ID'),
-      name: z.string().describe('Item name'),
-    })).describe('Matching items'),
+    media: z.array(z.object({
+      id: z.number().int().describe('AniList media ID.'),
+      title: z.string().describe('Primary display title.'),
+      mean_score: z.number().nullable().describe('AniList mean score 0–100, or null.'),
+    })).describe('Ranked media entries.'),
   }),
-  auth: ['inventory:read'],
-
   async handler(input, ctx) {
-    const items = await findItems(input.query, input.limit);
-    ctx.log.info('Search completed', { query: input.query, count: items.length });
-    return { items };
+    ctx.log.info('Fetching rankings', { mode: input.mode });
+    const media = await anilist.getRankings(input.mode, input.media_type, input.page, input.per_page);
+    return { media };
   },
-
-  // format() populates content[] — the markdown twin of structuredContent.
-  // Different clients read different surfaces (Claude Code → structuredContent,
-  // Claude Desktop → content[]); both must carry the same data.
-  // Enforced at lint time: every field in `output` must appear in the rendered text.
   format: (result) => [{
     type: 'text',
-    text: result.items.map(i => `**${i.id}**: ${i.name}`).join('\n'),
+    text: result.media.map((m, i) => `${i + 1}. **${m.title}** (ID: ${m.id}) — score: ${m.mean_score ?? 'N/A'}`).join('\n'),
   }],
 });
 ```
@@ -98,63 +82,28 @@ export const searchItems = tool('search_items', {
 ```ts
 import { resource, z } from '@cyanheads/mcp-ts-core';
 import { notFound } from '@cyanheads/mcp-ts-core/errors';
+import * as anilist from '@/services/anilist/anilist-service.js';
 
-export const itemData = resource('inventory://{itemId}', {
-  description: 'Fetch an inventory item by ID.',
-  params: z.object({ itemId: z.string().describe('Item identifier') }),
-  auth: ['inventory:read'],
+export const animeMediaResource = resource('anime://media/{id}', {
+  name: 'anime-media',
+  description: 'Full media record for an anime or manga by AniList ID.',
+  mimeType: 'application/json',
+  params: z.object({
+    id: z.string().describe('AniList media ID as a string. Obtain from anime_search_media.'),
+  }),
   async handler(params, ctx) {
-    const item = await ctx.state.get(`item:${params.itemId}`);
-    if (!item) throw notFound(`Item ${params.itemId} not found`, { itemId: params.itemId });
-    return item;
+    const numericId = parseInt(params.id, 10);
+    if (isNaN(numericId) || numericId < 1) throw notFound(`Invalid AniList media ID: ${params.id}`);
+    const detail = await anilist.getMediaById(numericId);
+    if (!detail) throw notFound(`No media found with AniList ID ${numericId}`, { id: numericId });
+    return detail;
   },
 });
 ```
 
-### Prompt
-
-```ts
-import { prompt, z } from '@cyanheads/mcp-ts-core';
-
-export const reviewCode = prompt('review_code', {
-  description: 'Review code for issues and best practices.',
-  args: z.object({
-    code: z.string().describe('Code to review'),
-    language: z.string().optional().describe('Programming language'),
-  }),
-  generate: (args) => [
-    { role: 'user', content: { type: 'text', text: `Review this ${args.language ?? ''} code:\n${args.code}` } },
-  ],
-});
-```
-
-### Server config
-
-```ts
-// src/config/server-config.ts — lazy-parsed, separate from framework config
-import { z } from '@cyanheads/mcp-ts-core';
-import { parseEnvConfig } from '@cyanheads/mcp-ts-core/config';
-
-const ServerConfigSchema = z.object({
-  apiKey: z.string().describe('External API key'),
-  maxResults: z.coerce.number().default(100),
-});
-
-let _config: z.infer<typeof ServerConfigSchema> | undefined;
-export function getServerConfig() {
-  _config ??= parseEnvConfig(ServerConfigSchema, {
-    apiKey: 'MY_API_KEY',
-    maxResults: 'MY_MAX_RESULTS',
-  });
-  return _config;
-}
-```
-
-`parseEnvConfig` maps Zod schema paths → env var names so errors name the variable (`MY_API_KEY`) not the path (`apiKey`). Throws `ConfigurationError`, which the framework prints as a clean startup banner.
-
 ### Server instructions
 
-`createApp({ instructions })` — optional server-level orientation, sent to clients on every `initialize` as session-level context. Use it for deployment guidance (connection aliases, regional notes, scope hints) instead of repeating the same context across tool descriptions. Client adoption is uneven, but there's no downside when set.
+`createApp({ instructions })` set in `src/index.ts` — orients clients: discovery workflow (search → get), dual-score policy, adult content opt-in, rate limit notes. No `server-config.ts` — all three upstream sources (AniList, Jikan, Kitsu) are keyless; no server-specific env vars.
 
 ---
 
@@ -164,14 +113,10 @@ Handlers receive a unified `ctx` object. Key properties:
 
 | Property | Description |
 |:---------|:------------|
-| `ctx.log` | Request-scoped logger — `.debug()`, `.info()`, `.notice()`, `.warning()`, `.error()`. Auto-correlates requestId, traceId, tenantId. |
-| `ctx.state` | Tenant-scoped KV — `.get(key)`, `.set(key, value, { ttl? })`, `.delete(key)`, `.list(prefix, { cursor, limit })`. Accepts any serializable value. |
-| `ctx.elicit` | Ask user for structured input. **Check for presence first:** `if (ctx.elicit) { ... }` |
-| `ctx.sample` | Request LLM completion from the client. **Check for presence first:** `if (ctx.sample) { ... }` |
-| `ctx.signal` | `AbortSignal` for cancellation. |
-| `ctx.progress` | Task progress (present when `task: true`) — `.setTotal(n)`, `.increment()`, `.update(message)`. |
+| `ctx.log` | Request-scoped logger — `.debug()`, `.info()`, `.notice()`, `.warning()`, `.error()`. Auto-correlates requestId, traceId, tenantId. Used in all handlers. |
+| `ctx.fail` | Typed error factory for declared error contracts — `ctx.fail('reason', message, { recovery })`. |
+| `ctx.signal` | `AbortSignal` for cancellation (pass to fetch calls in service layer). |
 | `ctx.requestId` | Unique request ID. |
-| `ctx.tenantId` | Tenant ID from JWT or `'default'` for stdio. |
 
 ---
 
@@ -223,20 +168,29 @@ See framework CLAUDE.md and the `api-errors` skill for the full auto-classificat
 
 ```text
 src/
-  index.ts                              # createApp() entry point
-  config/
-    server-config.ts                    # Server-specific env vars (Zod schema)
+  index.ts                              # createApp() entry point — server instructions, tool/resource registration
   services/
-    [domain]/
-      [domain]-service.ts               # Domain service (init/accessor pattern)
-      types.ts                          # Domain types
+    anilist/
+      anilist-service.ts                # AniList GraphQL client (primary source)
+      types.ts                          # AniList domain types
+    jikan/
+      jikan-service.ts                  # Jikan v4 REST client (MAL scores, recommendations)
+      types.ts                          # Jikan domain types
+    kitsu/
+      kitsu-service.ts                  # Kitsu JSON:API client (streaming links)
+      types.ts                          # Kitsu domain types
   mcp-server/
     tools/definitions/
-      [tool-name].tool.ts               # Tool definitions
+      anime-search-media.tool.ts
+      anime-get-media.tool.ts
+      anime-get-relations.tool.ts
+      anime-get-schedule.tool.ts
+      anime-find-characters.tool.ts
+      anime-get-recommendations.tool.ts
+      anime-get-rankings.tool.ts
+      anime-get-studio.tool.ts
     resources/definitions/
-      [resource-name].resource.ts       # Resource definitions
-    prompts/definitions/
-      [prompt-name].prompt.ts           # Prompt definitions
+      anime-media.resource.ts           # anime://media/{id}
 ```
 
 ---
