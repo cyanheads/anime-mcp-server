@@ -24,8 +24,7 @@ const StatusEnum = z
 export const animeSearchMedia = tool('anime_search_media', {
   description:
     'Search anime or manga by title, genre, tag, season, year, format, or status. ' +
-    'Returns ranked results with AniList IDs, titles, scores, format, and episode/chapter counts. ' +
-    'AniList is the primary source; Jikan (MAL) is used as a fallback when AniList returns no results.',
+    'Returns ranked results with AniList IDs, titles, scores, format, and episode/chapter counts.',
   annotations: { readOnlyHint: true, openWorldHint: true },
 
   input: z.object({
@@ -67,6 +66,15 @@ export const animeSearchMedia = tool('anime_search_media', {
       .default(false)
       .describe('Include adult/NSFW content. Default false.'),
   }),
+
+  enrichment: {
+    notice: z
+      .string()
+      .optional()
+      .describe(
+        'Recovery guidance when results is empty — echoes applied filters and suggests how to broaden the search.',
+      ),
+  },
 
   output: z.object({
     source: z
@@ -202,6 +210,18 @@ export const animeSearchMedia = tool('anime_search_media', {
     }
 
     // No results from either source
+    const filters: string[] = [];
+    if (input.query) filters.push(`query="${input.query}"`);
+    if (input.genre) filters.push(`genre="${input.genre}"`);
+    if (input.tag) filters.push(`tag="${input.tag}"`);
+    if (input.season) filters.push(`season=${input.season}`);
+    if (input.season_year) filters.push(`season_year=${input.season_year}`);
+    if (input.format) filters.push(`format=${input.format}`);
+    if (input.status) filters.push(`status=${input.status}`);
+    const filterDesc = filters.length > 0 ? filters.join(', ') : 'the given filters';
+    ctx.enrich.notice(
+      `No results for ${filterDesc}. Try broadening the search: remove filters, check spelling, or use a genre instead of a tag (e.g. genre="Action" rather than tag="Action").`,
+    );
     return {
       source: 'anilist' as const,
       page: input.page,
