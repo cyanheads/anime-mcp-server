@@ -26,8 +26,8 @@ export const animeGetRecommendations = tool('anime_get_recommendations', {
       .max(500)
       .optional()
       .describe(
-        'Optional: what you liked about this title (e.g. "the slow-burn romance" or "mecha action"). ' +
-          'Included in the output for context; the agent can use it to highlight relevant picks.',
+        'What you liked about this title — e.g. "the slow-burn romance" or "mecha action". ' +
+          'Returned as-is in the response.',
       ),
     page: z
       .number()
