@@ -115,14 +115,14 @@ describe('animeGetStudio', () => {
     });
   });
 
-  it('throws a plain Error when neither name nor id is provided', async () => {
+  it('throws ctx.fail("missing_identifier") when neither name nor id is provided', async () => {
     const ctx = createMockContext({ errors: animeGetStudio.errors });
     // Neither name nor id — but the Zod schema allows it (both optional)
     const input = animeGetStudio.input.parse({ sort: 'SCORE_DESC' });
 
-    await expect(animeGetStudio.handler(input, ctx)).rejects.toThrow(
-      'Provide either name or id to look up a studio',
-    );
+    await expect(animeGetStudio.handler(input, ctx)).rejects.toMatchObject({
+      data: { reason: 'missing_identifier' },
+    });
   });
 
   it('applies default sort: POPULARITY_DESC', () => {

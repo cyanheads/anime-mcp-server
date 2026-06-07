@@ -4,7 +4,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode, validationError } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import * as anilist from '@/services/anilist/anilist-service.js';
 
 export const animeGetStudio = tool('anime_get_studio', {
@@ -79,6 +79,13 @@ export const animeGetStudio = tool('anime_get_studio', {
 
   errors: [
     {
+      reason: 'missing_identifier',
+      code: JsonRpcErrorCode.InvalidParams,
+      when: 'Neither name nor id is provided',
+      recovery:
+        'Provide either name (e.g. "MAPPA") or id (AniList studio ID) to identify the studio.',
+    },
+    {
       reason: 'not_found',
       code: JsonRpcErrorCode.NotFound,
       when: 'Neither name search nor ID lookup returns a result on AniList',
@@ -89,7 +96,7 @@ export const animeGetStudio = tool('anime_get_studio', {
 
   async handler(input, ctx) {
     if (!input.name && !input.id) {
-      throw validationError('Provide either name or id to look up a studio');
+      throw ctx.fail('missing_identifier', 'Provide either name or id to look up a studio');
     }
 
     let studio: Awaited<ReturnType<typeof anilist.getStudioById>>;
