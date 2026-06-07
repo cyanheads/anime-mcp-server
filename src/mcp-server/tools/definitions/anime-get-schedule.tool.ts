@@ -49,6 +49,15 @@ export const animeGetSchedule = tool('anime_get_schedule', {
     include_adult: z.boolean().default(false).describe('Include adult/NSFW titles. Default false.'),
   }),
 
+  enrichment: {
+    notice: z
+      .string()
+      .optional()
+      .describe(
+        'Recovery guidance when entries is empty — echoes the applied mode/season and suggests how to broaden.',
+      ),
+  },
+
   output: z.object({
     mode: z.enum(['season', 'upcoming']).describe('Mode used for this response.'),
     season_label: z
@@ -123,6 +132,12 @@ export const animeGetSchedule = tool('anime_get_schedule', {
         includeAdult: input.include_adult,
       });
 
+      if (page.media.length === 0) {
+        ctx.enrich.notice(
+          `No entries for ${input.season} ${input.season_year}. Verify the season/year is correct, or try an adjacent season.`,
+        );
+      }
+
       type SeasonMediaNode = (typeof page.media)[0] & {
         nextAiringEpisode?: { airingAt: number; episode: number; timeUntilAiring: number } | null;
       };
@@ -162,6 +177,12 @@ export const animeGetSchedule = tool('anime_get_schedule', {
 
     // Sort by airing time
     schedules.sort((a, b) => a.airingAt - b.airingAt);
+
+    if (schedules.length === 0) {
+      ctx.enrich.notice(
+        `No upcoming episodes found within ${input.days_ahead} day(s). Try increasing days_ahead (max 30).`,
+      );
+    }
 
     return {
       mode: 'upcoming' as const,

@@ -51,6 +51,15 @@ export const animeGetRankings = tool('anime_get_rankings', {
       .describe('Include adult/NSFW content. Default false.'),
   }),
 
+  enrichment: {
+    notice: z
+      .string()
+      .optional()
+      .describe(
+        'Recovery guidance when entries is empty — echoes the applied mode/filters and suggests how to broaden.',
+      ),
+  },
+
   output: z.object({
     mode: z.enum(['top', 'trending', 'seasonal']).describe('Ranking mode used.'),
     media_type: z.enum(['ANIME', 'MANGA']).describe('Media type ranked.'),
@@ -117,6 +126,17 @@ export const animeGetRankings = tool('anime_get_rankings', {
     }
 
     const startRank = (input.page - 1) * input.per_page + 1;
+
+    if (page.media.length === 0) {
+      const filters: string[] = [`mode=${input.mode}`];
+      if (input.genre) filters.push(`genre="${input.genre}"`);
+      if (input.format) filters.push(`format=${input.format}`);
+      if (input.season) filters.push(`season=${input.season}`);
+      if (input.season_year) filters.push(`season_year=${input.season_year}`);
+      ctx.enrich.notice(
+        `No entries for ${filters.join(', ')}. Try removing genre or format filters, or check that the season/year combination exists.`,
+      );
+    }
 
     return {
       mode: input.mode,
