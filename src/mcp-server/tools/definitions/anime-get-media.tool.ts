@@ -109,7 +109,7 @@ export const animeGetMedia = tool('anime_get_media', {
           .describe('MAL popularity rank (by list count), or null.'),
       })
       .describe(
-        'Scores from multiple communities. AniList and MAL use different scales and methodologies — never blend them.',
+        'Community scores. AniList uses a 0–100 scale; MAL uses 0–10.0. Both are returned separately.',
       ),
     streaming_links: z
       .array(
