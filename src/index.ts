@@ -11,6 +11,8 @@ import { allResourceDefinitions } from './mcp-server/resources/index.js';
 import { allToolDefinitions } from './mcp-server/tools/index.js';
 
 await createApp({
+  name: 'anime-mcp-server',
+  title: 'anime-mcp-server',
   tools: allToolDefinitions,
   resources: allResourceDefinitions,
   prompts: allPromptDefinitions,
