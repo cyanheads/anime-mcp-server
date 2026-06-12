@@ -149,7 +149,7 @@ export const animeFindCharacters = tool('anime_find_characters', {
     },
     {
       reason: 'missing_identifier',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'Neither id nor character_name nor voice_actor_name provided',
       recovery:
         'Provide at least one of: id (media AniList ID), character_name, or voice_actor_name.',

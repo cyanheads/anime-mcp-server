@@ -80,7 +80,7 @@ export const animeGetStudio = tool('anime_get_studio', {
   errors: [
     {
       reason: 'missing_identifier',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'Neither name nor id is provided',
       recovery:
         'Provide either name (e.g. "MAPPA") or id (AniList studio ID) to identify the studio.',

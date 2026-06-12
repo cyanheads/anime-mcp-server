@@ -106,7 +106,7 @@ export const animeGetSchedule = tool('anime_get_schedule', {
   errors: [
     {
       reason: 'invalid_season',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'mode is "season" but season or season_year is missing',
       recovery:
         'Provide both season (WINTER/SPRING/SUMMER/FALL) and season_year (e.g. 2024) when using mode "season".',
