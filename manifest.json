@@ -1,7 +1,7 @@
 {
   "manifest_version": "0.3",
   "name": "anime-mcp-server",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Search anime/manga, get full detail, franchise watch order, seasonal schedule, characters, rankings, and studio filmography via MCP. STDIO or Streamable HTTP.",
   "author": { "name": "cyanheads" },
   "repository": {

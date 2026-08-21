@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.5](changelog/0.1.x/0.1.5.md) — 2026-08-21
+
+Repairs anime_find_characters' character-name and voice-actor-name lookups, which could not return a result, and limits truncation disclosure to pages that were actually capped.
+
 ## [0.1.4](changelog/0.1.x/0.1.4.md) — 2026-08-21
 
 Adopts @cyanheads/mcp-ts-core ^0.12.3 (MCP SDK v2; protocol 2026-07-28 served alongside 2025; strict tool inputs; error envelope in the advertised outputSchema) and discloses pagination totals across the tool surface.
