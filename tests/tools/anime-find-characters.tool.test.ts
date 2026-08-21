@@ -6,12 +6,18 @@
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeFindCharacters } from '@/mcp-server/tools/definitions/anime-find-characters.tool.js';
+import type {
+  CharacterEdge,
+  CharacterWithMedia,
+  MediaNode,
+  StaffWithRoles,
+} from '@/services/anilist/types.js';
 
 vi.mock('@/services/anilist/anilist-service.js');
 
 import * as anilist from '@/services/anilist/anilist-service.js';
 
-const mockCharacterEdges = {
+const mockCharacterEdges: { characters: CharacterEdge[]; hasNextPage: boolean } = {
   characters: [
     {
       node: {
@@ -36,7 +42,7 @@ const mockCharacterEdges = {
   hasNextPage: false,
 };
 
-const mockMediaNode = {
+const mockMediaNode: MediaNode = {
   id: 11757,
   idMal: 9253,
   type: 'ANIME' as const,
@@ -53,7 +59,7 @@ const mockMediaNode = {
   coverImage: null,
 };
 
-const mockCharacterWithMedia = {
+const mockCharacterWithMedia: CharacterWithMedia = {
   id: 40882,
   name: { full: 'Okabe Rintarou', native: '岡部倫太郎' },
   image: { large: 'https://example.com/okabe.jpg', medium: null },
@@ -79,7 +85,7 @@ const mockCharacterWithMedia = {
   },
 };
 
-const mockStaffWithRoles = {
+const mockStaffWithRoles: StaffWithRoles = {
   id: 95061,
   name: { full: 'Mamoru Miyano', native: '宮野真守' },
   language: 'JAPANESE' as const,
@@ -226,7 +232,7 @@ describe('animeFindCharacters', () => {
     const result = await animeFindCharacters.handler(input, ctx);
 
     const blocks = animeFindCharacters.format!(result);
-    const text = blocks[0]!.text as string;
+    const text = (blocks[0] as { text: string }).text;
     expect(text).toContain('Okabe Rintarou');
     expect(text).toContain('MAIN');
     expect(text).toContain('Mamoru Miyano');
@@ -239,7 +245,7 @@ describe('animeFindCharacters', () => {
     const result = await animeFindCharacters.handler(input, ctx);
 
     const blocks = animeFindCharacters.format!(result);
-    const text = blocks[0]!.text as string;
+    const text = (blocks[0] as { text: string }).text;
     expect(text).toContain('Mamoru Miyano');
     expect(text).toContain('Steins;Gate');
     expect(text).toContain('AL:11757');

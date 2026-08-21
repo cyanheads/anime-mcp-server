@@ -6,6 +6,8 @@
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeSearchMedia } from '@/mcp-server/tools/definitions/anime-search-media.tool.js';
+import type { MediaPage } from '@/services/anilist/types.js';
+import type { JikanPagination, JikanSearchResult } from '@/services/jikan/types.js';
 
 // Mock the service modules at the boundary
 vi.mock('@/services/anilist/anilist-service.js');
@@ -14,7 +16,7 @@ vi.mock('@/services/jikan/jikan-service.js');
 import * as anilist from '@/services/anilist/anilist-service.js';
 import * as jikan from '@/services/jikan/jikan-service.js';
 
-const mockAnilistPage = {
+const mockAnilistPage: MediaPage = {
   pageInfo: { total: 1, currentPage: 1, lastPage: 1, hasNextPage: false, perPage: 20 },
   media: [
     {
@@ -41,16 +43,20 @@ const mockAnilistPage = {
   ],
 };
 
-const emptyAnilistPage = {
+const emptyAnilistPage: MediaPage = {
   pageInfo: { total: 0, currentPage: 1, lastPage: 1, hasNextPage: false, perPage: 20 },
   media: [],
 };
 
-const mockJikanResult = {
+const mockJikanResult: {
+  results: JikanSearchResult[];
+  pagination: JikanPagination | null;
+} = {
   pagination: {
     current_page: 1,
     has_next_page: false,
     items: { total: 1, count: 1, per_page: 20 },
+    last_visible_page: 1,
   },
   results: [
     {
@@ -62,6 +68,9 @@ const mockJikanResult = {
       episodes: 25,
       chapters: null,
       score: 9.08,
+      rank: 2,
+      scored_by: 700000,
+      url: 'https://myanimelist.net/anime/9253',
     },
   ],
 };
@@ -130,7 +139,7 @@ describe('animeSearchMedia', () => {
 
     const blocks = animeSearchMedia.format!(result);
     expect(blocks).toHaveLength(1);
-    const text = blocks[0]!.text as string;
+    const text = (blocks[0] as { text: string }).text;
     expect(text).toContain('AL:11757');
     expect(text).toContain('MAL:9253');
     expect(text).toContain('90');
@@ -146,7 +155,7 @@ describe('animeSearchMedia', () => {
       results: [],
     };
     const blocks = animeSearchMedia.format!(emptyResult);
-    expect(blocks[0]!.text as string).toContain('No results found');
+    expect((blocks[0] as { text: string }).text).toContain('No results found');
   });
 
   it('handles sparse payload: missing optional fields do not break output', async () => {

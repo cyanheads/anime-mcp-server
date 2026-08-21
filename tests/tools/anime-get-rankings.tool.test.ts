@@ -6,12 +6,13 @@
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeGetRankings } from '@/mcp-server/tools/definitions/anime-get-rankings.tool.js';
+import type { MediaPage } from '@/services/anilist/types.js';
 
 vi.mock('@/services/anilist/anilist-service.js');
 
 import * as anilist from '@/services/anilist/anilist-service.js';
 
-const mockPage = {
+const mockPage: MediaPage = {
   pageInfo: { total: 100, currentPage: 1, lastPage: 4, hasNextPage: true, perPage: 25 },
   media: [
     {
@@ -128,7 +129,7 @@ describe('animeGetRankings', () => {
     const result = await animeGetRankings.handler(input, ctx);
 
     const blocks = animeGetRankings.format!(result);
-    const text = blocks[0]!.text as string;
+    const text = (blocks[0] as { text: string }).text;
     expect(text).toContain('1.');
     expect(text).toContain('AL:11757');
     expect(text).toContain('90/100');

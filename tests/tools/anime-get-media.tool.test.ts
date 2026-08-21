@@ -6,6 +6,9 @@
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeGetMedia } from '@/mcp-server/tools/definitions/anime-get-media.tool.js';
+import type { MediaDetail } from '@/services/anilist/types.js';
+import type { JikanMedia } from '@/services/jikan/types.js';
+import type { KitsuStreamingResult } from '@/services/kitsu/types.js';
 
 vi.mock('@/services/anilist/anilist-service.js');
 vi.mock('@/services/jikan/jikan-service.js');
@@ -15,7 +18,7 @@ import * as anilist from '@/services/anilist/anilist-service.js';
 import * as jikan from '@/services/jikan/jikan-service.js';
 import * as kitsu from '@/services/kitsu/kitsu-service.js';
 
-const mockDetail = {
+const mockDetail: MediaDetail = {
   id: 11757,
   idMal: 9253,
   type: 'ANIME' as const,
@@ -110,15 +113,33 @@ const mockDetail = {
   endDate: { year: 2011, month: 9, day: 14 },
 };
 
-const mockJikanFull = {
+const mockJikanFull: JikanMedia = {
+  mal_id: 9253,
+  title: 'Steins;Gate',
+  title_english: 'Steins;Gate',
+  title_japanese: 'シュタインズ・ゲート',
+  type: 'TV',
+  status: 'Finished Airing',
   score: 9.09,
   scored_by: 700000,
   rank: 2,
   popularity: 3,
+  episodes: 25,
+  chapters: null,
+  volumes: null,
+  favorites: 100000,
+  synopsis: 'A time travel story.',
+  url: 'https://myanimelist.net/anime/9253',
+  images: null,
+  external: null,
+  streaming: null,
 };
 
-const mockKitsuStreaming = {
-  streamingLinks: [{ url: 'https://crunchyroll.com/steins-gate', subs: ['en'], dubs: ['en'] }],
+const mockKitsuStreaming: KitsuStreamingResult = {
+  kitsuId: '10519',
+  streamingLinks: [
+    { id: '1', url: 'https://crunchyroll.com/steins-gate', subs: ['en'], dubs: ['en'] },
+  ],
 };
 
 describe('animeGetMedia', () => {
@@ -175,7 +196,10 @@ describe('animeGetMedia', () => {
   it('falls back to AniList externalLinks when Kitsu has no streaming data', async () => {
     vi.mocked(anilist.getMediaById).mockResolvedValue(mockDetail);
     vi.mocked(jikan.getMediaFull).mockResolvedValue(null);
-    vi.mocked(kitsu.getAnimeStreamingByMalId).mockResolvedValue({ streamingLinks: [] });
+    vi.mocked(kitsu.getAnimeStreamingByMalId).mockResolvedValue({
+      kitsuId: '',
+      streamingLinks: [],
+    });
 
     const ctx = createMockContext({ errors: animeGetMedia.errors });
     const input = animeGetMedia.input.parse({ id: 11757 });
@@ -221,7 +245,7 @@ describe('animeGetMedia', () => {
     const result = await animeGetMedia.handler(input, ctx);
 
     const blocks = animeGetMedia.format!(result);
-    const text = blocks[0]!.text as string;
+    const text = (blocks[0] as { text: string }).text;
     expect(text).toContain('AL:11757');
     expect(text).toContain('MAL:9253');
     expect(text).toContain('anilist_mean=');
@@ -255,7 +279,10 @@ describe('animeGetMedia', () => {
     };
     vi.mocked(anilist.getMediaById).mockResolvedValue(sparseDetail);
     vi.mocked(jikan.getMediaFull).mockResolvedValue(null);
-    vi.mocked(kitsu.getAnimeStreamingByMalId).mockResolvedValue({ streamingLinks: [] });
+    vi.mocked(kitsu.getAnimeStreamingByMalId).mockResolvedValue({
+      kitsuId: '',
+      streamingLinks: [],
+    });
 
     const ctx = createMockContext({ errors: animeGetMedia.errors });
     const input = animeGetMedia.input.parse({ id: 11757 });

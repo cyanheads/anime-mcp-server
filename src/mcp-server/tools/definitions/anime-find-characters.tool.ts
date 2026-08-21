@@ -63,6 +63,14 @@ export const animeFindCharacters = tool('anime_find_characters', {
     per_page: z.number().int().min(1).max(25).default(25).describe('Results per page. Maximum 25.'),
   }),
 
+  enrichment: {
+    truncated: z
+      .boolean()
+      .describe('True when the cast list was capped at per_page (by_media mode only).'),
+    shown: z.number().int().describe('Number of characters returned.'),
+    cap: z.number().int().describe('The per-page limit applied.'),
+  },
+
   output: z.object({
     mode: z
       .enum(['by_media', 'by_character', 'by_voice_actor'])
@@ -176,6 +184,8 @@ export const animeFindCharacters = tool('anime_find_characters', {
         perPage: input.per_page,
       });
 
+      ctx.enrich.truncated({ shown: result.characters.length, cap: input.per_page });
+
       return {
         mode: 'by_media' as const,
         media_id: input.id,
@@ -260,9 +270,14 @@ export const animeFindCharacters = tool('anime_find_characters', {
     }
 
     // Mode C: by voice actor name
-    ctx.log.info('Searching VA by name', { name: input.voice_actor_name });
+    const vaName = input.voice_actor_name;
+    if (!vaName) {
+      throw ctx.fail('missing_identifier', 'voice_actor_name is required for name-based lookup');
+    }
 
-    const staff = await anilist.searchStaff(input.voice_actor_name!, input.page, input.per_page);
+    ctx.log.info('Searching VA by name', { name: vaName });
+
+    const staff = await anilist.searchStaff(vaName, input.page, input.per_page);
 
     if (!staff) {
       throw ctx.fail(
@@ -316,11 +331,11 @@ export const animeFindCharacters = tool('anime_find_characters', {
         }
       }
     } else if (result.mode === 'by_character') {
-      if (result.characters.length === 0) {
+      const first = result.characters[0];
+      if (!first) {
         lines.push('No character found.');
         return [{ type: 'text', text: lines.join('\n') }];
       }
-      const first = result.characters[0]!;
       lines.push(
         `## ${first.character_name ?? 'Unknown'} (${first.character_name_native ?? '?'}) [char_id:${first.character_id}]`,
         `image: ${first.character_image_url ?? 'none'} | site: ${first.character_site_url ?? 'none'}`,

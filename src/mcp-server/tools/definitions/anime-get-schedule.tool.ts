@@ -56,6 +56,11 @@ export const animeGetSchedule = tool('anime_get_schedule', {
       .describe(
         'Recovery guidance when entries is empty — echoes the applied mode/season and suggests how to broaden.',
       ),
+    totalCount: z
+      .number()
+      .int()
+      .optional()
+      .describe('Total entries in the season, when AniList reports it (season mode only).'),
   },
 
   output: z.object({
@@ -137,6 +142,7 @@ export const animeGetSchedule = tool('anime_get_schedule', {
           `No entries for ${input.season} ${input.season_year}. Verify the season/year is correct, or try an adjacent season.`,
         );
       }
+      if (page.pageInfo.total != null) ctx.enrich.total(page.pageInfo.total);
 
       type SeasonMediaNode = (typeof page.media)[0] & {
         nextAiringEpisode?: { airingAt: number; episode: number; timeUntilAiring: number } | null;
@@ -212,11 +218,11 @@ export const animeGetSchedule = tool('anime_get_schedule', {
     if (result.mode === 'season') {
       lines.push(
         `## ${result.season_label} Anime Schedule`,
-        `${result.total_results !== null ? `${result.total_results} titles` : 'Results'} · page ${result.page}`,
+        `mode: ${result.mode} | ${result.total_results !== null ? `${result.total_results} titles` : 'Results'} · page ${result.page}`,
         '',
       );
     } else {
-      lines.push('## Upcoming Airing Episodes', `Page ${result.page}`, '');
+      lines.push('## Upcoming Airing Episodes', `mode: ${result.mode} | Page ${result.page}`, '');
     }
 
     if (result.entries.length === 0) {

@@ -6,12 +6,13 @@
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeGetRelations } from '@/mcp-server/tools/definitions/anime-get-relations.tool.js';
+import type { MediaNode, MediaRelationEdge } from '@/services/anilist/types.js';
 
 vi.mock('@/services/anilist/anilist-service.js');
 
 import * as anilist from '@/services/anilist/anilist-service.js';
 
-const rootNode = {
+const rootNode: MediaNode = {
   id: 11757,
   idMal: 9253,
   type: 'ANIME' as const,
@@ -33,7 +34,7 @@ const rootNode = {
   },
 };
 
-const sequelNode = {
+const sequelNode: MediaNode = {
   id: 14247,
   idMal: 20911,
   type: 'ANIME' as const,
@@ -50,7 +51,7 @@ const sequelNode = {
   coverImage: null,
 };
 
-const sequelEdges = [{ relationType: 'SEQUEL' as const, node: sequelNode }];
+const sequelEdges: MediaRelationEdge[] = [{ relationType: 'SEQUEL', node: sequelNode }];
 
 describe('animeGetRelations', () => {
   beforeEach(() => {
@@ -186,7 +187,7 @@ describe('animeGetRelations', () => {
     const result = await animeGetRelations.handler(input, ctx);
 
     const blocks = animeGetRelations.format!(result);
-    const text = blocks[0]!.text as string;
+    const text = (blocks[0] as { text: string }).text;
     expect(text).toContain('AL:11757');
     expect(text).toContain('ROOT');
     expect(text).toContain('depth');

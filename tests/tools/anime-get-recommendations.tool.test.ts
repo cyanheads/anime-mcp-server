@@ -6,6 +6,8 @@
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeGetRecommendations } from '@/mcp-server/tools/definitions/anime-get-recommendations.tool.js';
+import type { RecommendationNode } from '@/services/anilist/types.js';
+import type { JikanRecommendation } from '@/services/jikan/types.js';
 
 vi.mock('@/services/anilist/anilist-service.js');
 vi.mock('@/services/jikan/jikan-service.js');
@@ -30,7 +32,7 @@ const sourceDetail = {
   coverImage: null,
 };
 
-const mockAnilistRecs = {
+const mockAnilistRecs: { nodes: RecommendationNode[]; hasNextPage: boolean } = {
   nodes: [
     {
       rating: 100,
@@ -64,8 +66,16 @@ const mockAnilistRecs = {
   hasNextPage: false,
 };
 
-const mockJikanRecs = [
-  { entry: { mal_id: 4654, title: 'Fullmetal Alchemist: Brotherhood' }, votes: 25 },
+const mockJikanRecs: JikanRecommendation[] = [
+  {
+    entry: {
+      mal_id: 4654,
+      title: 'Fullmetal Alchemist: Brotherhood',
+      url: 'https://myanimelist.net/anime/4654',
+      images: null,
+    },
+    votes: 25,
+  },
 ];
 
 describe('animeGetRecommendations', () => {
@@ -160,7 +170,7 @@ describe('animeGetRecommendations', () => {
     const result = await animeGetRecommendations.handler(input, ctx);
 
     const blocks = animeGetRecommendations.format!(result);
-    const text = blocks[0]!.text as string;
+    const text = (blocks[0] as { text: string }).text;
     expect(text).toContain('AL:11757');
     expect(text).toContain('AL:9756');
     expect(text).toContain('AL rating: 100');
@@ -177,6 +187,6 @@ describe('animeGetRecommendations', () => {
     const result = await animeGetRecommendations.handler(input, ctx);
 
     const blocks = animeGetRecommendations.format!(result);
-    expect(blocks[0]!.text as string).toContain('No recommendations found');
+    expect((blocks[0] as { text: string }).text).toContain('No recommendations found');
   });
 });

@@ -107,6 +107,13 @@ export const animeGetRelations = tool('anime_get_relations', {
       ),
   }),
 
+  enrichment: {
+    totalCount: z
+      .number()
+      .int()
+      .describe('Total unique franchise entries found — the response is complete, not paged.'),
+  },
+
   errors: [
     {
       reason: 'not_found',
@@ -136,7 +143,8 @@ export const animeGetRelations = tool('anime_get_relations', {
     const toVisit: Array<{ id: number; depth: number }> = [{ id: input.id, depth: 0 }];
 
     while (toVisit.length > 0) {
-      const item = toVisit.shift()!;
+      const item = toVisit.shift();
+      if (item === undefined) break;
       if (item.depth > input.max_depth) continue;
 
       maxDepthReached = Math.max(maxDepthReached, item.depth);
@@ -181,6 +189,7 @@ export const animeGetRelations = tool('anime_get_relations', {
 
     // Sort for watch order
     const entries = Array.from(visited.values());
+    ctx.enrich.total(visited.size);
     entries.sort((a, b) => {
       const aPriority = RELATION_ORDER[a.relationType ?? 'OTHER'] ?? 11;
       const bPriority = RELATION_ORDER[b.relationType ?? 'OTHER'] ?? 11;

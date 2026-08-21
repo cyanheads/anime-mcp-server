@@ -44,6 +44,14 @@ export const animeGetRecommendations = tool('anime_get_recommendations', {
       .describe('Recommendations per page from AniList. Maximum 25.'),
   }),
 
+  enrichment: {
+    truncated: z
+      .boolean()
+      .describe('True when this page of recommendations was capped at per_page.'),
+    shown: z.number().int().describe('Number of recommendations returned on this page.'),
+    cap: z.number().int().describe('The per-page limit applied.'),
+  },
+
   output: z.object({
     source_id: z.number().int().describe('AniList ID of the source title.'),
     source_id_mal: z.number().int().nullable().describe('MAL ID of the source title, or null.'),
@@ -125,18 +133,18 @@ export const animeGetRecommendations = tool('anime_get_recommendations', {
     }
 
     // Merge: AniList records are primary, supplement with Jikan votes
-    const merged = anilistRecs.nodes
-      .filter((n) => n.mediaRecommendation !== null)
-      .map((n) => {
-        const m = n.mediaRecommendation!;
-        const jikanVotes = m.idMal ? (jikanVoteMap.get(m.idMal) ?? null) : null;
-        // Remove from Jikan map so we know what's left (Jikan-only recs)
-        if (m.idMal) jikanVoteMap.delete(m.idMal);
+    const merged = anilistRecs.nodes.flatMap((n) => {
+      if (n.mediaRecommendation === null) return [];
+      const m = n.mediaRecommendation;
+      const jikanVotes = m.idMal ? (jikanVoteMap.get(m.idMal) ?? null) : null;
+      // Remove from Jikan map so we know what's left (Jikan-only recs)
+      if (m.idMal) jikanVoteMap.delete(m.idMal);
 
-        const sources: Array<'anilist' | 'jikan'> = ['anilist'];
-        if (jikanVotes !== null) sources.push('jikan');
+      const sources: Array<'anilist' | 'jikan'> = ['anilist'];
+      if (jikanVotes !== null) sources.push('jikan');
 
-        return {
+      return [
+        {
           id: m.id,
           id_mal: m.idMal ?? null,
           title: m.title.romaji,
@@ -149,11 +157,14 @@ export const animeGetRecommendations = tool('anime_get_recommendations', {
           anilist_rating: n.rating ?? null,
           jikan_votes: jikanVotes,
           sources,
-        };
-      });
+        },
+      ];
+    });
 
     // Sort by AniList rating descending
     merged.sort((a, b) => (b.anilist_rating ?? 0) - (a.anilist_rating ?? 0));
+
+    ctx.enrich.truncated({ shown: merged.length, cap: input.per_page });
 
     return {
       source_id: input.id,

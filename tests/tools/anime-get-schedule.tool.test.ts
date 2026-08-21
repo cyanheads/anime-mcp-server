@@ -6,12 +6,15 @@
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeGetSchedule } from '@/mcp-server/tools/definitions/anime-get-schedule.tool.js';
+import type { AiringSchedule, MediaNode, MediaPage } from '@/services/anilist/types.js';
 
 vi.mock('@/services/anilist/anilist-service.js');
 
 import * as anilist from '@/services/anilist/anilist-service.js';
 
-const mockMediaNode = {
+const mockMediaNode: MediaNode & {
+  nextAiringEpisode: { airingAt: number; episode: number; timeUntilAiring: number } | null;
+} = {
   id: 154587,
   idMal: null,
   type: 'ANIME' as const,
@@ -38,12 +41,12 @@ const mockMediaNode = {
   },
 };
 
-const mockSeasonPage = {
+const mockSeasonPage: MediaPage = {
   pageInfo: { total: 1, currentPage: 1, lastPage: 1, hasNextPage: false, perPage: 25 },
   media: [mockMediaNode],
 };
 
-const mockAiringSchedules = [
+const mockAiringSchedules: AiringSchedule[] = [
   {
     id: 1,
     airingAt: Math.floor(Date.now() / 1000) + 3600,
@@ -126,7 +129,7 @@ describe('animeGetSchedule', () => {
     const result = await animeGetSchedule.handler(input, ctx);
 
     const blocks = animeGetSchedule.format!(result);
-    const text = blocks[0]!.text as string;
+    const text = (blocks[0] as { text: string }).text;
     expect(text).toContain('FALL 2024');
     expect(text).toContain('AL:154587');
   });
@@ -138,7 +141,7 @@ describe('animeGetSchedule', () => {
     const result = await animeGetSchedule.handler(input, ctx);
 
     const blocks = animeGetSchedule.format!(result);
-    const text = blocks[0]!.text as string;
+    const text = (blocks[0] as { text: string }).text;
     expect(text).toContain('Ep 5');
     expect(text).toContain('AL:154587');
   });
@@ -158,6 +161,6 @@ describe('animeGetSchedule', () => {
 
     expect(result.entries).toHaveLength(0);
     const blocks = animeGetSchedule.format!(result);
-    expect(blocks[0]!.text as string).toContain('No entries found');
+    expect((blocks[0] as { text: string }).text).toContain('No entries found');
   });
 });

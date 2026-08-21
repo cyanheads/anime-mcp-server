@@ -6,6 +6,9 @@
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeMediaResource } from '@/mcp-server/resources/definitions/anime-media.resource.js';
+import type { MediaDetail } from '@/services/anilist/types.js';
+import type { JikanMedia } from '@/services/jikan/types.js';
+import type { KitsuStreamingResult } from '@/services/kitsu/types.js';
 
 vi.mock('@/services/anilist/anilist-service.js');
 vi.mock('@/services/jikan/jikan-service.js');
@@ -15,7 +18,7 @@ import * as anilist from '@/services/anilist/anilist-service.js';
 import * as jikan from '@/services/jikan/jikan-service.js';
 import * as kitsu from '@/services/kitsu/kitsu-service.js';
 
-const mockDetail = {
+const mockDetail: MediaDetail = {
   id: 11757,
   idMal: 9253,
   type: 'ANIME' as const,
@@ -62,9 +65,37 @@ const mockDetail = {
   endDate: null,
 };
 
-const mockJikanFull = { score: 9.09, scored_by: 700000, rank: 2, popularity: 3 };
-const mockKitsuStreaming = {
-  streamingLinks: [{ url: 'https://crunchyroll.com/steins-gate', subs: ['en'], dubs: [] }],
+const mockJikanFull: JikanMedia = {
+  mal_id: 9253,
+  title: 'Steins;Gate',
+  title_english: 'Steins;Gate',
+  title_japanese: 'シュタインズ・ゲート',
+  type: 'TV',
+  status: 'Finished Airing',
+  score: 9.09,
+  scored_by: 700000,
+  rank: 2,
+  popularity: 3,
+  episodes: 25,
+  chapters: null,
+  volumes: null,
+  favorites: 100000,
+  synopsis: 'A time travel story.',
+  url: 'https://myanimelist.net/anime/9253',
+  images: null,
+  external: null,
+  streaming: null,
+};
+const mockKitsuStreaming: KitsuStreamingResult = {
+  kitsuId: '10519',
+  streamingLinks: [
+    {
+      id: '1',
+      url: 'https://crunchyroll.com/steins-gate',
+      subs: ['en'],
+      dubs: [],
+    },
+  ],
 };
 
 describe('animeMediaResource', () => {
@@ -78,7 +109,7 @@ describe('animeMediaResource', () => {
     vi.mocked(kitsu.getAnimeStreamingByMalId).mockResolvedValue(mockKitsuStreaming);
 
     const ctx = createMockContext({ tenantId: 'test-tenant' });
-    const params = animeMediaResource.params.parse({ id: '11757' });
+    const params = animeMediaResource.params!.parse({ id: '11757' });
     const result = await animeMediaResource.handler(params, ctx);
 
     expect(result.id).toBe(11757);
@@ -93,14 +124,14 @@ describe('animeMediaResource', () => {
 
   it('throws notFound for a non-numeric ID string', async () => {
     const ctx = createMockContext({ tenantId: 'test-tenant' });
-    const params = animeMediaResource.params.parse({ id: 'not-a-number' });
+    const params = animeMediaResource.params!.parse({ id: 'not-a-number' });
 
     await expect(animeMediaResource.handler(params, ctx)).rejects.toThrow();
   });
 
   it('throws notFound when ID is zero or negative (invalid)', async () => {
     const ctx = createMockContext({ tenantId: 'test-tenant' });
-    const params = animeMediaResource.params.parse({ id: '0' });
+    const params = animeMediaResource.params!.parse({ id: '0' });
 
     await expect(animeMediaResource.handler(params, ctx)).rejects.toThrow();
   });
@@ -109,7 +140,7 @@ describe('animeMediaResource', () => {
     vi.mocked(anilist.getMediaById).mockResolvedValue(null);
 
     const ctx = createMockContext({ tenantId: 'test-tenant' });
-    const params = animeMediaResource.params.parse({ id: '99999' });
+    const params = animeMediaResource.params!.parse({ id: '99999' });
 
     await expect(animeMediaResource.handler(params, ctx)).rejects.toThrow();
   });
@@ -120,7 +151,7 @@ describe('animeMediaResource', () => {
     vi.mocked(kitsu.getAnimeStreamingByMalId).mockRejectedValue(new Error('Kitsu down'));
 
     const ctx = createMockContext({ tenantId: 'test-tenant' });
-    const params = animeMediaResource.params.parse({ id: '11757' });
+    const params = animeMediaResource.params!.parse({ id: '11757' });
     const result = await animeMediaResource.handler(params, ctx);
 
     expect(result.id).toBe(11757);
@@ -135,7 +166,7 @@ describe('animeMediaResource', () => {
     vi.mocked(kitsu.getAnimeStreamingByMalId).mockResolvedValue(mockKitsuStreaming);
 
     const ctx = createMockContext({ tenantId: 'test-tenant' });
-    const params = animeMediaResource.params.parse({ id: '11757' });
+    const params = animeMediaResource.params!.parse({ id: '11757' });
     const result = await animeMediaResource.handler(params, ctx);
 
     expect(result.streaming_count).toBe(1); // from Kitsu
@@ -147,7 +178,7 @@ describe('animeMediaResource', () => {
     vi.mocked(jikan.getMediaFull).mockResolvedValue(null);
 
     const ctx = createMockContext({ tenantId: 'test-tenant' });
-    const params = animeMediaResource.params.parse({ id: '11757' });
+    const params = animeMediaResource.params!.parse({ id: '11757' });
     await animeMediaResource.handler(params, ctx);
 
     expect(vi.mocked(kitsu.getAnimeStreamingByMalId)).not.toHaveBeenCalled();
@@ -170,10 +201,13 @@ describe('animeMediaResource', () => {
     };
     vi.mocked(anilist.getMediaById).mockResolvedValue(sparseDetail);
     vi.mocked(jikan.getMediaFull).mockResolvedValue(null);
-    vi.mocked(kitsu.getAnimeStreamingByMalId).mockResolvedValue({ streamingLinks: [] });
+    vi.mocked(kitsu.getAnimeStreamingByMalId).mockResolvedValue({
+      kitsuId: '',
+      streamingLinks: [],
+    });
 
     const ctx = createMockContext({ tenantId: 'test-tenant' });
-    const params = animeMediaResource.params.parse({ id: '11757' });
+    const params = animeMediaResource.params!.parse({ id: '11757' });
     const result = await animeMediaResource.handler(params, ctx);
 
     expect(result.id_mal).toBeNull();

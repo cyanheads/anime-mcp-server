@@ -58,6 +58,11 @@ export const animeGetRankings = tool('anime_get_rankings', {
       .describe(
         'Recovery guidance when entries is empty — echoes the applied mode/filters and suggests how to broaden.',
       ),
+    totalCount: z
+      .number()
+      .int()
+      .optional()
+      .describe('Total matching entries across all pages, when AniList reports it.'),
   },
 
   output: z.object({
@@ -108,6 +113,8 @@ export const animeGetRankings = tool('anime_get_rankings', {
       perPage: input.per_page,
       includeAdult: input.include_adult,
     });
+
+    if (page.pageInfo.total != null) ctx.enrich.total(page.pageInfo.total);
 
     // Compute season label for seasonal mode
     let seasonLabel: string | null = null;

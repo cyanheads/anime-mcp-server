@@ -74,6 +74,11 @@ export const animeSearchMedia = tool('anime_search_media', {
       .describe(
         'Recovery guidance when results is empty — echoes applied filters and suggests how to broaden the search.',
       ),
+    totalCount: z
+      .number()
+      .int()
+      .optional()
+      .describe('Total matching results across all pages, when the source reports it.'),
   },
 
   output: z.object({
@@ -151,6 +156,7 @@ export const animeSearchMedia = tool('anime_search_media', {
 
     // AniList returned results
     if (page.media.length > 0) {
+      if (page.pageInfo.total != null) ctx.enrich.total(page.pageInfo.total);
       return {
         source: 'anilist' as const,
         page: page.pageInfo.currentPage,
@@ -184,6 +190,10 @@ export const animeSearchMedia = tool('anime_search_media', {
         page: input.page,
         limit: input.per_page,
       });
+
+      if (jikanResult.pagination?.items.total != null) {
+        ctx.enrich.total(jikanResult.pagination.items.total);
+      }
 
       return {
         source: 'jikan' as const,

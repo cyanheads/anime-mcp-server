@@ -6,12 +6,13 @@
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeGetStudio } from '@/mcp-server/tools/definitions/anime-get-studio.tool.js';
+import type { StudioDetail } from '@/services/anilist/types.js';
 
 vi.mock('@/services/anilist/anilist-service.js');
 
 import * as anilist from '@/services/anilist/anilist-service.js';
 
-const mockStudioDetail = {
+const mockStudioDetail: StudioDetail = {
   id: 21,
   name: 'White Fox',
   isAnimationStudio: true,
@@ -137,7 +138,7 @@ describe('animeGetStudio', () => {
     const result = await animeGetStudio.handler(input, ctx);
 
     const blocks = animeGetStudio.format!(result);
-    const text = blocks[0]!.text as string;
+    const text = (blocks[0] as { text: string }).text;
     expect(text).toContain('White Fox');
     expect(text).toContain('AniList ID: 21');
     expect(text).toContain('AL:11757');
@@ -160,7 +161,7 @@ describe('animeGetStudio', () => {
     const result = await animeGetStudio.handler(input, ctx);
 
     const blocks = animeGetStudio.format!(result);
-    expect(blocks[0]!.text as string).toContain('No titles found');
+    expect((blocks[0] as { text: string }).text).toContain('No titles found');
   });
 
   it('handles sparse filmography entries: null optional fields', async () => {

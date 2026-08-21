@@ -41,6 +41,14 @@ export const animeGetStudio = tool('anime_get_studio', {
     per_page: z.number().int().min(1).max(50).default(25).describe('Results per page. Maximum 50.'),
   }),
 
+  enrichment: {
+    totalCount: z
+      .number()
+      .int()
+      .optional()
+      .describe('Total titles in the filmography, when AniList reports it.'),
+  },
+
   output: z.object({
     studio_id: z.number().int().describe('AniList studio ID.'),
     studio_name: z.string().describe('Studio name.'),
@@ -127,6 +135,8 @@ export const animeGetStudio = tool('anime_get_studio', {
           : `No studio found matching "${input.name}"`,
       );
     }
+
+    if (studio.media.pageInfo.total != null) ctx.enrich.total(studio.media.pageInfo.total);
 
     return {
       studio_id: studio.id,
