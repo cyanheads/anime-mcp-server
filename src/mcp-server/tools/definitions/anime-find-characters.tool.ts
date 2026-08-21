@@ -66,9 +66,20 @@ export const animeFindCharacters = tool('anime_find_characters', {
   enrichment: {
     truncated: z
       .boolean()
-      .describe('True when the cast list was capped at per_page (by_media mode only).'),
-    shown: z.number().int().describe('Number of characters returned.'),
-    cap: z.number().int().describe('The per-page limit applied.'),
+      .optional()
+      .describe(
+        'True when the cast list was capped at per_page. Present in by_media mode only, and only when the cap was hit.',
+      ),
+    shown: z
+      .number()
+      .int()
+      .optional()
+      .describe('Number of characters returned. Present alongside truncated.'),
+    cap: z
+      .number()
+      .int()
+      .optional()
+      .describe('The per-page limit applied. Present alongside truncated.'),
   },
 
   output: z.object({
@@ -184,7 +195,9 @@ export const animeFindCharacters = tool('anime_find_characters', {
         perPage: input.per_page,
       });
 
-      ctx.enrich.truncated({ shown: result.characters.length, cap: input.per_page });
+      if (result.hasNextPage) {
+        ctx.enrich.truncated({ shown: result.characters.length, cap: input.per_page });
+      }
 
       return {
         mode: 'by_media' as const,

@@ -47,9 +47,20 @@ export const animeGetRecommendations = tool('anime_get_recommendations', {
   enrichment: {
     truncated: z
       .boolean()
-      .describe('True when this page of recommendations was capped at per_page.'),
-    shown: z.number().int().describe('Number of recommendations returned on this page.'),
-    cap: z.number().int().describe('The per-page limit applied.'),
+      .optional()
+      .describe(
+        'True when this page of recommendations was capped at per_page. Present only when the cap was hit.',
+      ),
+    shown: z
+      .number()
+      .int()
+      .optional()
+      .describe('Number of recommendations returned on this page. Present alongside truncated.'),
+    cap: z
+      .number()
+      .int()
+      .optional()
+      .describe('The per-page limit applied. Present alongside truncated.'),
   },
 
   output: z.object({
@@ -164,7 +175,9 @@ export const animeGetRecommendations = tool('anime_get_recommendations', {
     // Sort by AniList rating descending
     merged.sort((a, b) => (b.anilist_rating ?? 0) - (a.anilist_rating ?? 0));
 
-    ctx.enrich.truncated({ shown: merged.length, cap: input.per_page });
+    if (anilistRecs.hasNextPage) {
+      ctx.enrich.truncated({ shown: merged.length, cap: input.per_page });
+    }
 
     return {
       source_id: input.id,

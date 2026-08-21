@@ -3,7 +3,7 @@
  * @module tests/tools/anime-get-recommendations.tool.test
  */
 
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeGetRecommendations } from '@/mcp-server/tools/definitions/anime-get-recommendations.tool.js';
 import type { RecommendationNode } from '@/services/anilist/types.js';
@@ -188,5 +188,38 @@ describe('animeGetRecommendations', () => {
 
     const blocks = animeGetRecommendations.format!(result);
     expect((blocks[0] as { text: string }).text).toContain('No recommendations found');
+  });
+});
+
+describe('animeGetRecommendations tool contract', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it('resolves structuredContent through the framework enrichment merge', async () => {
+    vi.mocked(anilist.getRecommendations).mockResolvedValue(mockAnilistRecs);
+    vi.mocked(anilist.getMediaById).mockResolvedValue(sourceDetail as any);
+    vi.mocked(jikan.getRecommendations).mockResolvedValue(mockJikanRecs);
+
+    const result = await runToolContract(animeGetRecommendations, { id: 11757 });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({ source_id: 11757 });
+  });
+
+  it('discloses truncation only when the page was capped', async () => {
+    vi.mocked(anilist.getMediaById).mockResolvedValue(sourceDetail as any);
+    vi.mocked(jikan.getRecommendations).mockResolvedValue([]);
+
+    vi.mocked(anilist.getRecommendations).mockResolvedValue(mockAnilistRecs);
+    const uncapped = await runToolContract(animeGetRecommendations, { id: 11757 });
+    expect(uncapped.structuredContent).not.toHaveProperty('truncated');
+
+    vi.mocked(anilist.getRecommendations).mockResolvedValue({
+      ...mockAnilistRecs,
+      hasNextPage: true,
+    });
+    const capped = await runToolContract(animeGetRecommendations, { id: 11757, per_page: 1 });
+    expect(capped.structuredContent).toMatchObject({ truncated: true, shown: 1, cap: 1 });
   });
 });

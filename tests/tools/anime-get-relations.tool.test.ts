@@ -3,7 +3,7 @@
  * @module tests/tools/anime-get-relations.tool.test
  */
 
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeGetRelations } from '@/mcp-server/tools/definitions/anime-get-relations.tool.js';
 import type { MediaNode, MediaRelationEdge } from '@/services/anilist/types.js';
@@ -191,5 +191,31 @@ describe('animeGetRelations', () => {
     expect(text).toContain('AL:11757');
     expect(text).toContain('ROOT');
     expect(text).toContain('depth');
+  });
+});
+
+describe('animeGetRelations tool contract', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it('populates the required totalCount enrichment on the success path', async () => {
+    vi.mocked(anilist.getMediaRelations).mockResolvedValueOnce(sequelEdges).mockResolvedValue([]);
+    vi.mocked(anilist.getMediaById).mockResolvedValue(rootNode as any);
+
+    const result = await runToolContract(animeGetRelations, { id: 11757, max_depth: 1 });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({ root_id: 11757, totalCount: 2 });
+  });
+
+  it('populates totalCount when the root has no relations', async () => {
+    vi.mocked(anilist.getMediaRelations).mockResolvedValue([]);
+    vi.mocked(anilist.getMediaById).mockResolvedValue(rootNode as any);
+
+    const result = await runToolContract(animeGetRelations, { id: 11757, max_depth: 1 });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({ totalCount: 1 });
   });
 });

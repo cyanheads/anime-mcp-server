@@ -3,7 +3,7 @@
  * @module tests/tools/anime-find-characters.tool.test
  */
 
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeFindCharacters } from '@/mcp-server/tools/definitions/anime-find-characters.tool.js';
 import type {
@@ -249,5 +249,51 @@ describe('animeFindCharacters', () => {
     expect(text).toContain('Mamoru Miyano');
     expect(text).toContain('Steins;Gate');
     expect(text).toContain('AL:11757');
+  });
+});
+
+describe('animeFindCharacters tool contract', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it('resolves structuredContent in by_media mode', async () => {
+    vi.mocked(anilist.getMediaCharacters).mockResolvedValue(mockCharacterEdges);
+
+    const result = await runToolContract(animeFindCharacters, { id: 11757 });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({ mode: 'by_media', media_id: 11757 });
+  });
+
+  it('resolves structuredContent in by_character mode', async () => {
+    vi.mocked(anilist.searchCharacter).mockResolvedValue(mockCharacterWithMedia);
+
+    const result = await runToolContract(animeFindCharacters, { character_name: 'Okabe' });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({ mode: 'by_character', media_id: null });
+  });
+
+  it('resolves structuredContent in by_voice_actor mode', async () => {
+    vi.mocked(anilist.searchStaff).mockResolvedValue(mockStaffWithRoles);
+
+    const result = await runToolContract(animeFindCharacters, { voice_actor_name: 'Miyano' });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({ mode: 'by_voice_actor', media_id: null });
+  });
+
+  it('discloses truncation only when the cast list was capped', async () => {
+    vi.mocked(anilist.getMediaCharacters).mockResolvedValue(mockCharacterEdges);
+    const uncapped = await runToolContract(animeFindCharacters, { id: 11757 });
+    expect(uncapped.structuredContent).not.toHaveProperty('truncated');
+
+    vi.mocked(anilist.getMediaCharacters).mockResolvedValue({
+      ...mockCharacterEdges,
+      hasNextPage: true,
+    });
+    const capped = await runToolContract(animeFindCharacters, { id: 11757, per_page: 1 });
+    expect(capped.structuredContent).toMatchObject({ truncated: true, shown: 1, cap: 1 });
   });
 });
