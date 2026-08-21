@@ -1,17 +1,19 @@
 {
   "name": "anime-mcp-server",
-  "version": "0.1.3",
-  "description": "",
+  "version": "0.1.4",
+  "description": "Search anime/manga, get full detail, franchise watch order, seasonal schedule, characters, rankings, and studio filmography via MCP. STDIO or Streamable HTTP.",
   "author": {
-    "name": ""
+    "name": "Casey Hand",
+    "email": "casey@caseyjhand.com",
+    "url": "https://caseyjhand.com"
   },
-  "homepage": "",
-  "repository": "",
+  "homepage": "https://github.com/cyanheads/anime-mcp-server#readme",
+  "repository": "https://github.com/cyanheads/anime-mcp-server",
   "license": "Apache-2.0",
   "mcpServers": {
     "anime-mcp-server": {
       "command": "npx",
-      "args": ["-y", "anime-mcp-server"],
+      "args": ["-y", "@cyanheads/anime-mcp-server"],
       "env": {
         "MCP_TRANSPORT_TYPE": "stdio"
       }

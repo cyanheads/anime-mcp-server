@@ -1,7 +1,7 @@
 {
   "anime-mcp-server": {
     "command": "npx",
-    "args": ["-y", "anime-mcp-server"],
+    "args": ["-y", "@cyanheads/anime-mcp-server"],
     "env": {
       "MCP_TRANSPORT_TYPE": "stdio"
     }
