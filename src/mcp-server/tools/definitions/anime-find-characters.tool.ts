@@ -80,6 +80,10 @@ export const animeFindCharacters = tool('anime_find_characters', {
       .int()
       .optional()
       .describe('The per-page limit applied. Present alongside truncated.'),
+    notice: z
+      .string()
+      .optional()
+      .describe('Next-page guidance. Present in by_media mode only when the cast list was capped.'),
   },
 
   output: z.object({
@@ -181,6 +185,7 @@ export const animeFindCharacters = tool('anime_find_characters', {
       throw ctx.fail(
         'missing_identifier',
         'Provide at least one of: id, character_name, or voice_actor_name',
+        { ...ctx.recoveryFor('missing_identifier') },
       );
     }
 
@@ -196,7 +201,11 @@ export const animeFindCharacters = tool('anime_find_characters', {
       });
 
       if (result.hasNextPage) {
-        ctx.enrich.truncated({ shown: result.characters.length, cap: input.per_page });
+        ctx.enrich.truncated({
+          shown: result.characters.length,
+          cap: input.per_page,
+          guidance: `More characters are available. Call anime_find_characters with page ${input.page + 1} and the same id, per_page, and language (if set) to continue.`,
+        });
       }
 
       return {
@@ -230,7 +239,9 @@ export const animeFindCharacters = tool('anime_find_characters', {
       const character = await anilist.searchCharacter(input.character_name);
 
       if (!character) {
-        throw ctx.fail('not_found', `No character found matching "${input.character_name}"`);
+        throw ctx.fail('not_found', `No character found matching "${input.character_name}"`, {
+          ...ctx.recoveryFor('not_found'),
+        });
       }
 
       // Map each media appearance as a character entry so the agent can see
@@ -296,6 +307,7 @@ export const animeFindCharacters = tool('anime_find_characters', {
       throw ctx.fail(
         'not_found',
         `No voice actor/staff found matching "${input.voice_actor_name}"`,
+        { ...ctx.recoveryFor('not_found') },
       );
     }
 

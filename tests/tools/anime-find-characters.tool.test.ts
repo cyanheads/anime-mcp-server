@@ -3,6 +3,7 @@
  * @module tests/tools/anime-find-characters.tool.test
  */
 
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeFindCharacters } from '@/mcp-server/tools/definitions/anime-find-characters.tool.js';
@@ -185,6 +186,8 @@ describe('animeFindCharacters', () => {
     const input = animeFindCharacters.input.parse({ page: 1 });
 
     await expect(animeFindCharacters.handler(input, ctx)).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+      message: 'Provide at least one of: id, character_name, or voice_actor_name',
       data: { reason: 'missing_identifier' },
     });
   });
@@ -195,6 +198,8 @@ describe('animeFindCharacters', () => {
     const input = animeFindCharacters.input.parse({ character_name: 'NonExistentCharacter12345' });
 
     await expect(animeFindCharacters.handler(input, ctx)).rejects.toMatchObject({
+      code: JsonRpcErrorCode.NotFound,
+      message: 'No character found matching "NonExistentCharacter12345"',
       data: { reason: 'not_found' },
     });
   });
@@ -205,6 +210,8 @@ describe('animeFindCharacters', () => {
     const input = animeFindCharacters.input.parse({ voice_actor_name: 'NonExistentVA12345' });
 
     await expect(animeFindCharacters.handler(input, ctx)).rejects.toMatchObject({
+      code: JsonRpcErrorCode.NotFound,
+      message: 'No voice actor/staff found matching "NonExistentVA12345"',
       data: { reason: 'not_found' },
     });
   });
@@ -273,6 +280,10 @@ describe('animeFindCharacters tool contract', () => {
 
     expect(result.isError).toBeFalsy();
     expect(result.structuredContent).toMatchObject({ mode: 'by_character', media_id: null });
+    expect(result.structuredContent).not.toHaveProperty('truncated');
+    expect(result.structuredContent).not.toHaveProperty('shown');
+    expect(result.structuredContent).not.toHaveProperty('cap');
+    expect(result.structuredContent).not.toHaveProperty('notice');
   });
 
   it('resolves structuredContent in by_voice_actor mode', async () => {
@@ -282,18 +293,134 @@ describe('animeFindCharacters tool contract', () => {
 
     expect(result.isError).toBeFalsy();
     expect(result.structuredContent).toMatchObject({ mode: 'by_voice_actor', media_id: null });
+    expect(result.structuredContent).not.toHaveProperty('truncated');
+    expect(result.structuredContent).not.toHaveProperty('shown');
+    expect(result.structuredContent).not.toHaveProperty('cap');
+    expect(result.structuredContent).not.toHaveProperty('notice');
   });
 
   it('discloses truncation only when the cast list was capped', async () => {
     vi.mocked(anilist.getMediaCharacters).mockResolvedValue(mockCharacterEdges);
     const uncapped = await runToolContract(animeFindCharacters, { id: 11757 });
     expect(uncapped.structuredContent).not.toHaveProperty('truncated');
+    expect(uncapped.structuredContent).not.toHaveProperty('shown');
+    expect(uncapped.structuredContent).not.toHaveProperty('cap');
+    expect(uncapped.structuredContent).not.toHaveProperty('notice');
+    expect(uncapped.content).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'text',
+          text: expect.stringContaining('More characters are available.'),
+        }),
+      ]),
+    );
 
     vi.mocked(anilist.getMediaCharacters).mockResolvedValue({
       ...mockCharacterEdges,
       hasNextPage: true,
     });
     const capped = await runToolContract(animeFindCharacters, { id: 11757, per_page: 1 });
-    expect(capped.structuredContent).toMatchObject({ truncated: true, shown: 1, cap: 1 });
+    const notice =
+      'More characters are available. Call anime_find_characters with page 2 and the same id, per_page, and language (if set) to continue.';
+    expect(capped.structuredContent).toMatchObject({
+      truncated: true,
+      shown: 1,
+      cap: 1,
+      notice,
+    });
+    expect(capped.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'text', text: expect.stringContaining(notice) }),
+      ]),
+    );
+  });
+
+  it('returns an uncapped empty page past the end', async () => {
+    vi.mocked(anilist.getMediaCharacters).mockResolvedValue({
+      characters: [],
+      hasNextPage: false,
+    });
+
+    const result = await runToolContract(animeFindCharacters, { id: 11757, page: 2 });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({
+      mode: 'by_media',
+      has_next_page: false,
+      characters: [],
+    });
+    expect(result.structuredContent).not.toHaveProperty('truncated');
+    expect(result.structuredContent).not.toHaveProperty('notice');
+    expect(result.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'text',
+          text: expect.stringContaining('No characters found.'),
+        }),
+      ]),
+    );
+  });
+
+  it('rejects per_page above the schema cap', async () => {
+    const result = await runToolContract(animeFindCharacters, { id: 11757, per_page: 26 });
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: { code: JsonRpcErrorCode.ValidationError },
+    });
+  });
+
+  it('returns recovery hints for every reachable declared contract failure', async () => {
+    const cases = [
+      {
+        input: {},
+        reason: 'missing_identifier',
+        message: 'Provide at least one of: id, character_name, or voice_actor_name',
+        recovery:
+          'Provide at least one of: id (media AniList ID), character_name, or voice_actor_name.',
+      },
+      {
+        input: { character_name: 'NonExistentCharacter12345' },
+        reason: 'not_found',
+        message: 'No character found matching "NonExistentCharacter12345"',
+        recovery:
+          'Try a broader name search or check spelling. For character searches, use the full name or a distinctive part of it.',
+      },
+      {
+        input: { voice_actor_name: 'NonExistentVA12345' },
+        reason: 'not_found',
+        message: 'No voice actor/staff found matching "NonExistentVA12345"',
+        recovery:
+          'Try a broader name search or check spelling. For character searches, use the full name or a distinctive part of it.',
+      },
+    ] as const;
+
+    vi.mocked(anilist.searchCharacter).mockResolvedValue(null);
+    vi.mocked(anilist.searchStaff).mockResolvedValue(null);
+
+    for (const testCase of cases) {
+      const result = await runToolContract(animeFindCharacters, testCase.input);
+
+      expect(result).toMatchObject({
+        isError: true,
+        structuredContent: {
+          error: {
+            message: testCase.message,
+            data: {
+              reason: testCase.reason,
+              recovery: { hint: testCase.recovery },
+            },
+          },
+        },
+      });
+      expect(result.content).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: 'text',
+            text: expect.stringContaining(`Recovery: ${testCase.recovery}`),
+          }),
+        ]),
+      );
+    }
   });
 });

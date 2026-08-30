@@ -124,6 +124,7 @@ export const animeGetSchedule = tool('anime_get_schedule', {
         throw ctx.fail(
           'invalid_season',
           'mode "season" requires both season and season_year parameters',
+          { ...ctx.recoveryFor('invalid_season') },
         );
       }
 

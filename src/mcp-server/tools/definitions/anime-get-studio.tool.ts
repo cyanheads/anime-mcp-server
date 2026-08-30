@@ -104,7 +104,9 @@ export const animeGetStudio = tool('anime_get_studio', {
 
   async handler(input, ctx) {
     if (!input.name && !input.id) {
-      throw ctx.fail('missing_identifier', 'Provide either name or id to look up a studio');
+      throw ctx.fail('missing_identifier', 'Provide either name or id to look up a studio', {
+        ...ctx.recoveryFor('missing_identifier'),
+      });
     }
 
     let studio: Awaited<ReturnType<typeof anilist.getStudioById>>;
@@ -133,6 +135,7 @@ export const animeGetStudio = tool('anime_get_studio', {
         input.id
           ? `No studio found with AniList ID ${input.id}`
           : `No studio found matching "${input.name}"`,
+        { ...ctx.recoveryFor('not_found') },
       );
     }
 

@@ -3,6 +3,7 @@
  * @module tests/tools/anime-get-recommendations.tool.test
  */
 
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeGetRecommendations } from '@/mcp-server/tools/definitions/anime-get-recommendations.tool.js';
@@ -214,12 +215,69 @@ describe('animeGetRecommendations tool contract', () => {
     vi.mocked(anilist.getRecommendations).mockResolvedValue(mockAnilistRecs);
     const uncapped = await runToolContract(animeGetRecommendations, { id: 11757 });
     expect(uncapped.structuredContent).not.toHaveProperty('truncated');
+    expect(uncapped.structuredContent).not.toHaveProperty('shown');
+    expect(uncapped.structuredContent).not.toHaveProperty('cap');
+    expect(uncapped.structuredContent).not.toHaveProperty('notice');
+    expect(uncapped.content).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'text',
+          text: expect.stringContaining('More recommendations are available.'),
+        }),
+      ]),
+    );
 
     vi.mocked(anilist.getRecommendations).mockResolvedValue({
       ...mockAnilistRecs,
       hasNextPage: true,
     });
     const capped = await runToolContract(animeGetRecommendations, { id: 11757, per_page: 1 });
-    expect(capped.structuredContent).toMatchObject({ truncated: true, shown: 1, cap: 1 });
+    const notice =
+      'More recommendations are available. Call anime_get_recommendations with page 2, the same id, and the same per_page to continue.';
+    expect(capped.structuredContent).toMatchObject({
+      truncated: true,
+      shown: 1,
+      cap: 1,
+      notice,
+    });
+    expect(capped.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'text', text: expect.stringContaining(notice) }),
+      ]),
+    );
+  });
+
+  it('returns an uncapped empty page past the end', async () => {
+    vi.mocked(anilist.getRecommendations).mockResolvedValue({ nodes: [], hasNextPage: false });
+    vi.mocked(anilist.getMediaById).mockResolvedValue(sourceDetail as any);
+    vi.mocked(jikan.getRecommendations).mockResolvedValue([]);
+
+    const result = await runToolContract(animeGetRecommendations, { id: 11757, page: 2 });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({
+      source_id: 11757,
+      has_next_page: false,
+      recommendations: [],
+    });
+    expect(result.structuredContent).not.toHaveProperty('truncated');
+    expect(result.structuredContent).not.toHaveProperty('notice');
+    expect(result.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'text',
+          text: expect.stringContaining('No recommendations found.'),
+        }),
+      ]),
+    );
+  });
+
+  it('rejects per_page above the schema cap', async () => {
+    const result = await runToolContract(animeGetRecommendations, { id: 11757, per_page: 26 });
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: { code: JsonRpcErrorCode.ValidationError },
+    });
   });
 });

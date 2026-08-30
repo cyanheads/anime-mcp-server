@@ -3,7 +3,8 @@
  * @module tests/tools/anime-get-media.tool.test
  */
 
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeGetMedia } from '@/mcp-server/tools/definitions/anime-get-media.tool.js';
 import type { MediaDetail } from '@/services/anilist/types.js';
@@ -174,8 +175,36 @@ describe('animeGetMedia', () => {
     const input = animeGetMedia.input.parse({ id: 99999 });
 
     await expect(animeGetMedia.handler(input, ctx)).rejects.toMatchObject({
+      code: JsonRpcErrorCode.NotFound,
+      message: 'No media found with AniList ID 99999',
       data: { reason: 'not_found' },
     });
+  });
+
+  it('returns the declared recovery hint on both contract error surfaces', async () => {
+    vi.mocked(anilist.getMediaById).mockResolvedValue(null);
+
+    const result = await runToolContract(animeGetMedia, { id: 99999 });
+    const recovery = 'Use anime_search_media to find a valid AniList ID and retry.';
+
+    expect(result).toMatchObject({
+      isError: true,
+      structuredContent: {
+        error: {
+          code: JsonRpcErrorCode.NotFound,
+          message: 'No media found with AniList ID 99999',
+          data: { reason: 'not_found', recovery: { hint: recovery } },
+        },
+      },
+    });
+    expect(result.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'text',
+          text: expect.stringContaining(`Recovery: ${recovery}`),
+        }),
+      ]),
+    );
   });
 
   it('degrades gracefully when Jikan and Kitsu both fail', async () => {

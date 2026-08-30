@@ -152,7 +152,9 @@ export const animeGetRelations = tool('anime_get_relations', {
       const edges: MediaRelationEdge[] | null = await anilist.getMediaRelations(item.id);
 
       if (item.depth === 0 && edges === null) {
-        throw ctx.fail('not_found', `No media found with AniList ID ${input.id}`);
+        throw ctx.fail('not_found', `No media found with AniList ID ${input.id}`, {
+          ...ctx.recoveryFor('not_found'),
+        });
       }
 
       if (edges === null) continue;
@@ -161,7 +163,9 @@ export const animeGetRelations = tool('anime_get_relations', {
       if (item.depth === 0) {
         const rootMedia = await anilist.getMediaById(input.id);
         if (!rootMedia) {
-          throw ctx.fail('not_found', `No media found with AniList ID ${input.id}`);
+          throw ctx.fail('not_found', `No media found with AniList ID ${input.id}`, {
+            ...ctx.recoveryFor('not_found'),
+          });
         }
         visited.set(input.id, {
           node: rootMedia as unknown as MediaNode,

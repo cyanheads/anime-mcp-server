@@ -3,7 +3,8 @@
  * @module tests/tools/anime-get-studio.tool.test
  */
 
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeGetStudio } from '@/mcp-server/tools/definitions/anime-get-studio.tool.js';
 import type { StudioDetail } from '@/services/anilist/types.js';
@@ -102,6 +103,8 @@ describe('animeGetStudio', () => {
     const input = animeGetStudio.input.parse({ name: 'NonExistentStudio99999' });
 
     await expect(animeGetStudio.handler(input, ctx)).rejects.toMatchObject({
+      code: JsonRpcErrorCode.NotFound,
+      message: 'No studio found matching "NonExistentStudio99999"',
       data: { reason: 'not_found' },
     });
   });
@@ -112,6 +115,8 @@ describe('animeGetStudio', () => {
     const input = animeGetStudio.input.parse({ id: 99999 });
 
     await expect(animeGetStudio.handler(input, ctx)).rejects.toMatchObject({
+      code: JsonRpcErrorCode.NotFound,
+      message: 'No studio found with AniList ID 99999',
       data: { reason: 'not_found' },
     });
   });
@@ -122,8 +127,62 @@ describe('animeGetStudio', () => {
     const input = animeGetStudio.input.parse({ sort: 'SCORE_DESC' });
 
     await expect(animeGetStudio.handler(input, ctx)).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+      message: 'Provide either name or id to look up a studio',
       data: { reason: 'missing_identifier' },
     });
+  });
+
+  it('returns the missing-identifier recovery hint on both contract error surfaces', async () => {
+    const result = await runToolContract(animeGetStudio, {});
+    const recovery =
+      'Provide either name (e.g. "MAPPA") or id (AniList studio ID) to identify the studio.';
+
+    expect(result).toMatchObject({
+      isError: true,
+      structuredContent: {
+        error: {
+          code: JsonRpcErrorCode.ValidationError,
+          message: 'Provide either name or id to look up a studio',
+          data: { reason: 'missing_identifier', recovery: { hint: recovery } },
+        },
+      },
+    });
+    expect(result.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'text',
+          text: expect.stringContaining(`Recovery: ${recovery}`),
+        }),
+      ]),
+    );
+  });
+
+  it('returns the not-found recovery hint on both contract error surfaces', async () => {
+    vi.mocked(anilist.getStudioById).mockResolvedValue(null);
+
+    const result = await runToolContract(animeGetStudio, { id: 99999 });
+    const recovery =
+      'Check the studio name spelling (e.g. "Kyoto Animation" not "KyoAni") or use the correct AniList studio ID.';
+
+    expect(result).toMatchObject({
+      isError: true,
+      structuredContent: {
+        error: {
+          code: JsonRpcErrorCode.NotFound,
+          message: 'No studio found with AniList ID 99999',
+          data: { reason: 'not_found', recovery: { hint: recovery } },
+        },
+      },
+    });
+    expect(result.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'text',
+          text: expect.stringContaining(`Recovery: ${recovery}`),
+        }),
+      ]),
+    );
   });
 
   it('applies default sort: POPULARITY_DESC', () => {

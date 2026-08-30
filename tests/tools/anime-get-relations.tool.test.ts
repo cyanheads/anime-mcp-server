@@ -3,6 +3,7 @@
  * @module tests/tools/anime-get-relations.tool.test
  */
 
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeGetRelations } from '@/mcp-server/tools/definitions/anime-get-relations.tool.js';
@@ -82,6 +83,22 @@ describe('animeGetRelations', () => {
     const input = animeGetRelations.input.parse({ id: 99999 });
 
     await expect(animeGetRelations.handler(input, ctx)).rejects.toMatchObject({
+      code: JsonRpcErrorCode.NotFound,
+      message: 'No media found with AniList ID 99999',
+      data: { reason: 'not_found' },
+    });
+  });
+
+  it('throws ctx.fail("not_found") when root detail lookup returns null', async () => {
+    vi.mocked(anilist.getMediaRelations).mockResolvedValue([]);
+    vi.mocked(anilist.getMediaById).mockResolvedValue(null);
+
+    const ctx = createMockContext({ errors: animeGetRelations.errors });
+    const input = animeGetRelations.input.parse({ id: 99999 });
+
+    await expect(animeGetRelations.handler(input, ctx)).rejects.toMatchObject({
+      code: JsonRpcErrorCode.NotFound,
+      message: 'No media found with AniList ID 99999',
       data: { reason: 'not_found' },
     });
   });
@@ -217,5 +234,58 @@ describe('animeGetRelations tool contract', () => {
 
     expect(result.isError).toBeFalsy();
     expect(result.structuredContent).toMatchObject({ totalCount: 1 });
+  });
+
+  it('returns the recovery hint when the root relations lookup returns null', async () => {
+    vi.mocked(anilist.getMediaRelations).mockResolvedValue(null);
+
+    const result = await runToolContract(animeGetRelations, { id: 99999 });
+    const recovery = 'Use anime_search_media to find a valid AniList ID and retry.';
+
+    expect(result).toMatchObject({
+      isError: true,
+      structuredContent: {
+        error: {
+          code: JsonRpcErrorCode.NotFound,
+          message: 'No media found with AniList ID 99999',
+          data: { reason: 'not_found', recovery: { hint: recovery } },
+        },
+      },
+    });
+    expect(result.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'text',
+          text: expect.stringContaining(`Recovery: ${recovery}`),
+        }),
+      ]),
+    );
+  });
+
+  it('returns the recovery hint when the root detail lookup returns null', async () => {
+    vi.mocked(anilist.getMediaRelations).mockResolvedValue([]);
+    vi.mocked(anilist.getMediaById).mockResolvedValue(null);
+
+    const result = await runToolContract(animeGetRelations, { id: 99999 });
+    const recovery = 'Use anime_search_media to find a valid AniList ID and retry.';
+
+    expect(result).toMatchObject({
+      isError: true,
+      structuredContent: {
+        error: {
+          code: JsonRpcErrorCode.NotFound,
+          message: 'No media found with AniList ID 99999',
+          data: { reason: 'not_found', recovery: { hint: recovery } },
+        },
+      },
+    });
+    expect(result.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'text',
+          text: expect.stringContaining(`Recovery: ${recovery}`),
+        }),
+      ]),
+    );
   });
 });

@@ -3,7 +3,8 @@
  * @module tests/tools/anime-get-schedule.tool.test
  */
 
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeGetSchedule } from '@/mcp-server/tools/definitions/anime-get-schedule.tool.js';
 import type { AiringSchedule, MediaNode, MediaPage } from '@/services/anilist/types.js';
@@ -83,6 +84,8 @@ describe('animeGetSchedule', () => {
     const input = animeGetSchedule.input.parse({ mode: 'season', season_year: 2024 });
 
     await expect(animeGetSchedule.handler(input, ctx)).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+      message: 'mode "season" requires both season and season_year parameters',
       data: { reason: 'invalid_season' },
     });
   });
@@ -92,8 +95,38 @@ describe('animeGetSchedule', () => {
     const input = animeGetSchedule.input.parse({ mode: 'season', season: 'FALL' });
 
     await expect(animeGetSchedule.handler(input, ctx)).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+      message: 'mode "season" requires both season and season_year parameters',
       data: { reason: 'invalid_season' },
     });
+  });
+
+  it('returns the declared recovery hint on both invalid-season error surfaces', async () => {
+    const result = await runToolContract(animeGetSchedule, {
+      mode: 'season',
+      season_year: 2024,
+    });
+    const recovery =
+      'Provide both season (WINTER/SPRING/SUMMER/FALL) and season_year (e.g. 2024) when using mode "season".';
+
+    expect(result).toMatchObject({
+      isError: true,
+      structuredContent: {
+        error: {
+          code: JsonRpcErrorCode.ValidationError,
+          message: 'mode "season" requires both season and season_year parameters',
+          data: { reason: 'invalid_season', recovery: { hint: recovery } },
+        },
+      },
+    });
+    expect(result.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'text',
+          text: expect.stringContaining(`Recovery: ${recovery}`),
+        }),
+      ]),
+    );
   });
 
   it('returns upcoming episodes when mode is "upcoming"', async () => {
