@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.6](changelog/0.1.x/0.1.6.md) — 2026-08-30
+
+Adds actionable MCP error recovery and pagination guidance, with stateless sessions as the sample default.
+
 ## [0.1.5](changelog/0.1.x/0.1.5.md) — 2026-08-21
 
 Repairs anime_find_characters' character-name and voice-actor-name lookups, which could not return a result, and limits truncation disclosure to pages that were actually capped.
