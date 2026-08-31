@@ -7,7 +7,7 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeGetRecommendations } from '@/mcp-server/tools/definitions/anime-get-recommendations.tool.js';
-import type { RecommendationNode } from '@/services/anilist/types.js';
+import type { MediaDetail, RecommendationNode } from '@/services/anilist/types.js';
 import type { JikanRecommendation } from '@/services/jikan/types.js';
 
 vi.mock('@/services/anilist/anilist-service.js');
@@ -16,7 +16,7 @@ vi.mock('@/services/jikan/jikan-service.js');
 import * as anilist from '@/services/anilist/anilist-service.js';
 import * as jikan from '@/services/jikan/jikan-service.js';
 
-const sourceDetail = {
+const sourceDetail: MediaDetail = {
   id: 11757,
   idMal: 9253,
   type: 'ANIME' as const,
@@ -28,9 +28,27 @@ const sourceDetail = {
   chapters: null,
   volumes: null,
   meanScore: 90,
+  averageScore: 90,
+  popularity: 500_000,
   isAdult: false,
   title: { romaji: 'Steins;Gate', english: 'Steins;Gate', native: null },
   coverImage: null,
+  bannerImage: null,
+  description: null,
+  source: null,
+  genres: [],
+  tags: [],
+  studios: { edges: [] },
+  relations: { edges: [] },
+  externalLinks: [],
+  siteUrl: null,
+  nextAiringEpisode: null,
+  isFavourite: false,
+  favourites: null,
+  hashtag: null,
+  trailer: null,
+  startDate: null,
+  endDate: null,
 };
 
 const mockAnilistRecs: { nodes: RecommendationNode[]; hasNextPage: boolean } = {
@@ -86,10 +104,10 @@ describe('animeGetRecommendations', () => {
 
   it('returns merged recommendations from AniList and Jikan', async () => {
     vi.mocked(anilist.getRecommendations).mockResolvedValue(mockAnilistRecs);
-    vi.mocked(anilist.getMediaById).mockResolvedValue(sourceDetail as any);
+    vi.mocked(anilist.getMediaById).mockResolvedValue(sourceDetail);
     vi.mocked(jikan.getRecommendations).mockResolvedValue(mockJikanRecs);
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: animeGetRecommendations.errors });
     const input = animeGetRecommendations.input.parse({ id: 11757 });
     const result = await animeGetRecommendations.handler(input, ctx);
 
@@ -107,10 +125,10 @@ describe('animeGetRecommendations', () => {
 
   it('includes liked_aspects in the output when provided', async () => {
     vi.mocked(anilist.getRecommendations).mockResolvedValue({ nodes: [], hasNextPage: false });
-    vi.mocked(anilist.getMediaById).mockResolvedValue(sourceDetail as any);
+    vi.mocked(anilist.getMediaById).mockResolvedValue(sourceDetail);
     vi.mocked(jikan.getRecommendations).mockResolvedValue([]);
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: animeGetRecommendations.errors });
     const input = animeGetRecommendations.input.parse({
       id: 11757,
       liked_aspects: 'the time travel plot',
@@ -120,12 +138,26 @@ describe('animeGetRecommendations', () => {
     expect(result.liked_aspects).toBe('the time travel plot');
   });
 
+  it('throws not_found when the source AniList media ID does not exist', async () => {
+    vi.mocked(anilist.getRecommendations).mockResolvedValue({ nodes: [], hasNextPage: false });
+    vi.mocked(anilist.getMediaById).mockResolvedValue(null);
+    const ctx = createMockContext({ errors: animeGetRecommendations.errors });
+    const input = animeGetRecommendations.input.parse({ id: 999_999_999 });
+
+    await expect(animeGetRecommendations.handler(input, ctx)).rejects.toMatchObject({
+      code: JsonRpcErrorCode.NotFound,
+      message: 'No media found with AniList ID 999999999',
+      data: { reason: 'not_found' },
+    });
+    expect(jikan.getRecommendations).not.toHaveBeenCalled();
+  });
+
   it('handles Jikan failure gracefully — AniList results still returned', async () => {
     vi.mocked(anilist.getRecommendations).mockResolvedValue(mockAnilistRecs);
-    vi.mocked(anilist.getMediaById).mockResolvedValue(sourceDetail as any);
+    vi.mocked(anilist.getMediaById).mockResolvedValue(sourceDetail);
     vi.mocked(jikan.getRecommendations).mockRejectedValue(new Error('Jikan down'));
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: animeGetRecommendations.errors });
     const input = animeGetRecommendations.input.parse({ id: 11757 });
     const result = await animeGetRecommendations.handler(input, ctx);
 
@@ -137,9 +169,9 @@ describe('animeGetRecommendations', () => {
   it('skips Jikan call when media has no idMal', async () => {
     const detailNoMal = { ...sourceDetail, idMal: null };
     vi.mocked(anilist.getRecommendations).mockResolvedValue(mockAnilistRecs);
-    vi.mocked(anilist.getMediaById).mockResolvedValue(detailNoMal as any);
+    vi.mocked(anilist.getMediaById).mockResolvedValue(detailNoMal);
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: animeGetRecommendations.errors });
     const input = animeGetRecommendations.input.parse({ id: 11757 });
     await animeGetRecommendations.handler(input, ctx);
 
@@ -148,10 +180,10 @@ describe('animeGetRecommendations', () => {
 
   it('deduplicates: same title from both sources appears once with both in sources[]', async () => {
     vi.mocked(anilist.getRecommendations).mockResolvedValue(mockAnilistRecs);
-    vi.mocked(anilist.getMediaById).mockResolvedValue(sourceDetail as any);
+    vi.mocked(anilist.getMediaById).mockResolvedValue(sourceDetail);
     vi.mocked(jikan.getRecommendations).mockResolvedValue(mockJikanRecs);
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: animeGetRecommendations.errors });
     const input = animeGetRecommendations.input.parse({ id: 11757 });
     const result = await animeGetRecommendations.handler(input, ctx);
 
@@ -163,10 +195,10 @@ describe('animeGetRecommendations', () => {
 
   it('formats output with AniList IDs and rating info', async () => {
     vi.mocked(anilist.getRecommendations).mockResolvedValue(mockAnilistRecs);
-    vi.mocked(anilist.getMediaById).mockResolvedValue(sourceDetail as any);
+    vi.mocked(anilist.getMediaById).mockResolvedValue(sourceDetail);
     vi.mocked(jikan.getRecommendations).mockResolvedValue(mockJikanRecs);
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: animeGetRecommendations.errors });
     const input = animeGetRecommendations.input.parse({ id: 11757 });
     const result = await animeGetRecommendations.handler(input, ctx);
 
@@ -180,10 +212,10 @@ describe('animeGetRecommendations', () => {
 
   it('formats empty recommendations without crashing', async () => {
     vi.mocked(anilist.getRecommendations).mockResolvedValue({ nodes: [], hasNextPage: false });
-    vi.mocked(anilist.getMediaById).mockResolvedValue(sourceDetail as any);
+    vi.mocked(anilist.getMediaById).mockResolvedValue(sourceDetail);
     vi.mocked(jikan.getRecommendations).mockResolvedValue([]);
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: animeGetRecommendations.errors });
     const input = animeGetRecommendations.input.parse({ id: 11757 });
     const result = await animeGetRecommendations.handler(input, ctx);
 
@@ -199,7 +231,7 @@ describe('animeGetRecommendations tool contract', () => {
 
   it('resolves structuredContent through the framework enrichment merge', async () => {
     vi.mocked(anilist.getRecommendations).mockResolvedValue(mockAnilistRecs);
-    vi.mocked(anilist.getMediaById).mockResolvedValue(sourceDetail as any);
+    vi.mocked(anilist.getMediaById).mockResolvedValue(sourceDetail);
     vi.mocked(jikan.getRecommendations).mockResolvedValue(mockJikanRecs);
 
     const result = await runToolContract(animeGetRecommendations, { id: 11757 });
@@ -208,8 +240,35 @@ describe('animeGetRecommendations tool contract', () => {
     expect(result.structuredContent).toMatchObject({ source_id: 11757 });
   });
 
+  it('returns not_found on both public error surfaces for a missing source', async () => {
+    vi.mocked(anilist.getRecommendations).mockResolvedValue({ nodes: [], hasNextPage: false });
+    vi.mocked(anilist.getMediaById).mockResolvedValue(null);
+
+    const result = await runToolContract(animeGetRecommendations, { id: 999_999_999 });
+    const recovery = 'Use anime_search_media to find a valid AniList ID and retry.';
+
+    expect(result).toMatchObject({
+      isError: true,
+      structuredContent: {
+        error: {
+          code: JsonRpcErrorCode.NotFound,
+          message: 'No media found with AniList ID 999999999',
+          data: { reason: 'not_found', recovery: { hint: recovery } },
+        },
+      },
+    });
+    expect(result.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'text',
+          text: expect.stringContaining(`Recovery: ${recovery}`),
+        }),
+      ]),
+    );
+  });
+
   it('discloses truncation only when the page was capped', async () => {
-    vi.mocked(anilist.getMediaById).mockResolvedValue(sourceDetail as any);
+    vi.mocked(anilist.getMediaById).mockResolvedValue(sourceDetail);
     vi.mocked(jikan.getRecommendations).mockResolvedValue([]);
 
     vi.mocked(anilist.getRecommendations).mockResolvedValue(mockAnilistRecs);
@@ -249,7 +308,7 @@ describe('animeGetRecommendations tool contract', () => {
 
   it('returns an uncapped empty page past the end', async () => {
     vi.mocked(anilist.getRecommendations).mockResolvedValue({ nodes: [], hasNextPage: false });
-    vi.mocked(anilist.getMediaById).mockResolvedValue(sourceDetail as any);
+    vi.mocked(anilist.getMediaById).mockResolvedValue(sourceDetail);
     vi.mocked(jikan.getRecommendations).mockResolvedValue([]);
 
     const result = await runToolContract(animeGetRecommendations, { id: 11757, page: 2 });

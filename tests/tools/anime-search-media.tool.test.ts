@@ -6,7 +6,7 @@
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeSearchMedia } from '@/mcp-server/tools/definitions/anime-search-media.tool.js';
-import type { MediaPage } from '@/services/anilist/types.js';
+import type { MediaNode, MediaPage } from '@/services/anilist/types.js';
 import type { JikanPagination, JikanSearchResult } from '@/services/jikan/types.js';
 
 // Mock the service modules at the boundary
@@ -100,6 +100,9 @@ describe('animeSearchMedia', () => {
   it('falls back to Jikan when AniList returns empty results', async () => {
     vi.mocked(anilist.searchMedia).mockResolvedValue(emptyAnilistPage);
     vi.mocked(jikan.searchMedia).mockResolvedValue(mockJikanResult);
+    vi.mocked(anilist.getMediaByMalIds).mockResolvedValue(
+      new Map([[9253, mockAnilistPage.media[0]!]]),
+    );
     const ctx = createMockContext();
     const input = animeSearchMedia.input.parse({ media_type: 'ANIME', query: 'Steins;Gate' });
 
@@ -109,6 +112,46 @@ describe('animeSearchMedia', () => {
     expect(result.results).toHaveLength(1);
     expect(result.results[0]!.id_mal).toBe(9253);
     expect(vi.mocked(jikan.searchMedia)).toHaveBeenCalled();
+  });
+
+  it('resolves Jikan fallback rows to actionable AniList IDs in one batch', async () => {
+    vi.mocked(anilist.searchMedia).mockResolvedValue(emptyAnilistPage);
+    vi.mocked(jikan.searchMedia).mockResolvedValue({
+      ...mockJikanResult,
+      results: [
+        mockJikanResult.results[0]!,
+        {
+          ...mockJikanResult.results[0]!,
+          mal_id: 999_999,
+          title: 'Unmatched title',
+          title_english: null,
+        },
+      ],
+    });
+    const resolved: MediaNode = {
+      ...mockAnilistPage.media[0]!,
+      id: 314,
+      idMal: 9253,
+    };
+    const lookup = vi
+      .mocked(anilist.getMediaByMalIds)
+      .mockResolvedValue(new Map([[9253, resolved]]));
+    const ctx = createMockContext();
+    const input = animeSearchMedia.input.parse({ media_type: 'ANIME', query: 'Steins;Gate' });
+
+    const result = await animeSearchMedia.handler(input, ctx);
+    const text = (animeSearchMedia.format!(result)[0] as { text: string }).text;
+
+    expect(lookup).toHaveBeenCalledOnce();
+    expect(lookup).toHaveBeenCalledWith([9253, 999_999], 'ANIME');
+    expect(result).toMatchObject({
+      source: 'jikan',
+      results: [{ id: 314, id_mal: 9253 }],
+    });
+    expect(result.results.every((entry) => entry.id > 0)).toBe(true);
+    expect(text).toContain('[AL:314/MAL:9253]');
+    expect(text).not.toContain('AL:0');
+    expect(text).not.toContain('MAL:999999');
   });
 
   it('returns empty results when AniList is empty and no query is provided', async () => {
@@ -129,6 +172,39 @@ describe('animeSearchMedia', () => {
     expect(input.page).toBe(1);
     expect(input.per_page).toBe(20);
     expect(input.include_adult).toBe(false);
+  });
+
+  it('accepts exactly the five advertised sort values', () => {
+    const values = [
+      'SEARCH_MATCH',
+      'SCORE_DESC',
+      'POPULARITY_DESC',
+      'TRENDING_DESC',
+      'START_DATE_DESC',
+    ] as const;
+
+    for (const sort of values) {
+      expect(() =>
+        animeSearchMedia.input.parse({ media_type: 'ANIME', sort: [sort] }),
+      ).not.toThrow();
+    }
+  });
+
+  it('rejects unsupported sort values before calling AniList', async () => {
+    expect(() =>
+      animeSearchMedia.input.parse({ media_type: 'ANIME', sort: ['NOT_A_SORT'] }),
+    ).toThrow(/SEARCH_MATCH/);
+    expect(anilist.searchMedia).not.toHaveBeenCalled();
+  });
+
+  it('keeps omitted sort undefined so the service applies SEARCH_MATCH', async () => {
+    vi.mocked(anilist.searchMedia).mockResolvedValue(mockAnilistPage);
+    const ctx = createMockContext();
+    const input = animeSearchMedia.input.parse({ media_type: 'ANIME', query: 'Steins;Gate' });
+
+    await animeSearchMedia.handler(input, ctx);
+
+    expect(anilist.searchMedia).toHaveBeenCalledWith(expect.objectContaining({ sort: undefined }));
   });
 
   it('formats output with IDs, scores, and season label', async () => {

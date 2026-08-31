@@ -112,6 +112,21 @@ export const animeFindCharacters = tool('anime_find_characters', {
               .string()
               .nullable()
               .describe('AniList character page URL, or null.'),
+            media_id: z
+              .number()
+              .int()
+              .optional()
+              .describe('AniList media ID for this appearance. Present in by_character mode.'),
+            media_title: z
+              .string()
+              .nullable()
+              .optional()
+              .describe('Romanized media title for this appearance. Present in by_character mode.'),
+            media_format: z
+              .string()
+              .nullable()
+              .optional()
+              .describe('Media format for this appearance. Present in by_character mode.'),
             voice_actors: z
               .array(
                 z
@@ -141,7 +156,10 @@ export const animeFindCharacters = tool('anime_find_characters', {
         va_name: z.string().nullable().describe('Voice actor full name.'),
         va_name_native: z.string().nullable().describe('Native script VA name, or null.'),
         language: z.string().nullable().describe('Primary voice acting language.'),
-        description: z.string().nullable().describe('Bio/description (HTML stripped), or null.'),
+        description: z
+          .string()
+          .nullable()
+          .describe('Normalized full bio/description text, or null.'),
         va_image_url: z.string().nullable().describe('VA image URL, or null.'),
         va_site_url: z.string().nullable().describe('AniList VA page URL, or null.'),
         roles: z
@@ -169,6 +187,12 @@ export const animeFindCharacters = tool('anime_find_characters', {
       when: 'Name search returns no match from AniList',
       recovery:
         'Try a broader name search or check spelling. For character searches, use the full name or a distinctive part of it.',
+    },
+    {
+      reason: 'media_not_found',
+      code: JsonRpcErrorCode.NotFound,
+      when: 'AniList has no media record for the requested ID',
+      recovery: 'Use anime_search_media to find a valid AniList media ID and retry.',
     },
     {
       reason: 'missing_identifier',
@@ -199,6 +223,12 @@ export const animeFindCharacters = tool('anime_find_characters', {
         page: input.page,
         perPage: input.per_page,
       });
+
+      if (!result) {
+        throw ctx.fail('media_not_found', `No media found with AniList ID ${input.id}`, {
+          ...ctx.recoveryFor('media_not_found'),
+        });
+      }
 
       if (result.hasNextPage) {
         ctx.enrich.truncated({
@@ -236,7 +266,11 @@ export const animeFindCharacters = tool('anime_find_characters', {
     if (input.character_name) {
       ctx.log.info('Searching character by name', { name: input.character_name });
 
-      const character = await anilist.searchCharacter(input.character_name);
+      const character = await anilist.searchCharacter(
+        input.character_name,
+        input.page,
+        input.per_page,
+      );
 
       if (!character) {
         throw ctx.fail('not_found', `No character found matching "${input.character_name}"`, {
@@ -246,7 +280,7 @@ export const animeFindCharacters = tool('anime_find_characters', {
 
       // Map each media appearance as a character entry so the agent can see
       // which titles the character appears in and their VAs per appearance.
-      const appearances = character.media.nodes.map((_media, i) => {
+      const appearances = character.media.nodes.map((media, i) => {
         const edge = character.media.edges[i];
         return {
           character_id: character.id,
@@ -255,8 +289,9 @@ export const animeFindCharacters = tool('anime_find_characters', {
           role: edge?.characterRole ?? 'SUPPORTING',
           character_image_url: character.image?.large ?? null,
           character_site_url: character.siteUrl ?? null,
-          // Attach media context via voice_actors reuse: each "va" entry here is
-          // a VA for this character in this specific media.
+          media_id: media.id,
+          media_title: media.title.romaji,
+          media_format: media.format ?? null,
           voice_actors: (edge?.voiceActors ?? []).map((va) => ({
             va_id: va.id,
             va_name: va.name.full,
@@ -280,6 +315,9 @@ export const animeFindCharacters = tool('anime_find_characters', {
                 role: 'SUPPORTING',
                 character_image_url: character.image?.large ?? null,
                 character_site_url: character.siteUrl ?? null,
+                media_id: undefined,
+                media_title: null,
+                media_format: null,
                 voice_actors: [],
               },
             ];
@@ -345,8 +383,12 @@ export const animeFindCharacters = tool('anime_find_characters', {
         return [{ type: 'text', text: lines.join('\n') }];
       }
       for (const c of result.characters) {
+        const mediaContext =
+          c.media_id !== undefined || c.media_title !== undefined || c.media_format !== undefined
+            ? ` | media_id:${c.media_id ?? 'none'} media_title:${c.media_title ?? 'none'} media_format:${c.media_format ?? 'none'}`
+            : '';
         lines.push(
-          `**${c.character_name ?? 'Unknown'}** (${c.character_name_native ?? '?'}) [char_id:${c.character_id}] [${c.role}]`,
+          `**${c.character_name ?? 'Unknown'}** (${c.character_name_native ?? '?'}) [char_id:${c.character_id}] [${c.role}]${mediaContext}`,
           `  image: ${c.character_image_url ?? 'none'} | site: ${c.character_site_url ?? 'none'}`,
         );
         for (const v of c.voice_actors) {
@@ -368,7 +410,9 @@ export const animeFindCharacters = tool('anime_find_characters', {
         `**Appears in ${result.characters.length} title(s):**`,
       );
       for (const c of result.characters) {
-        lines.push(`  [${c.role}] char_id:${c.character_id}`);
+        lines.push(
+          `  media_title:${c.media_title ?? 'Unknown title'} [AL:${c.media_id ?? '?'}] media_id:${c.media_id ?? 'none'} media_format:${c.media_format ?? 'none'} role:${c.role} char_id:${c.character_id}`,
+        );
         for (const v of c.voice_actors) {
           lines.push(
             `    VA: ${v.va_name ?? '?'} (${v.va_name_native ?? '?'}) (${v.language ?? '?'}) [va_id:${v.va_id}] image:${v.va_image_url ?? 'none'} site:${v.va_site_url ?? 'none'}`,
@@ -382,7 +426,7 @@ export const animeFindCharacters = tool('anime_find_characters', {
           `## ${va.va_name ?? 'Unknown'} (${va.va_name_native ?? '?'}) (VA)`,
           `va_id:${va.va_id} | va_name:${va.va_name ?? '?'} | va_name_native:${va.va_name_native ?? '?'} | language:${va.language ?? 'unknown'}`,
           `va_image_url:${va.va_image_url ?? 'none'} | va_site_url:${va.va_site_url ?? 'none'}`,
-          `description:${va.description ?? 'none'}`,
+          `description:${renderDescription(va.description)}`,
           '',
           '**Roles:**',
         );
@@ -399,7 +443,7 @@ export const animeFindCharacters = tool('anime_find_characters', {
     if (result.mode !== 'by_voice_actor' && result.voice_actor) {
       const va = result.voice_actor;
       lines.push(
-        `va_id:${va.va_id} va_name:${va.va_name ?? '?'} va_name_native:${va.va_name_native ?? '?'} language:${va.language ?? '?'} va_image_url:${va.va_image_url ?? 'none'} va_site_url:${va.va_site_url ?? 'none'} description:${va.description ?? 'none'}`,
+        `va_id:${va.va_id} va_name:${va.va_name ?? '?'} va_name_native:${va.va_name_native ?? '?'} language:${va.language ?? '?'} va_image_url:${va.va_image_url ?? 'none'} va_site_url:${va.va_site_url ?? 'none'} description:${renderDescription(va.description)}`,
       );
       for (const role of va.roles) {
         lines.push(
@@ -413,3 +457,8 @@ export const animeFindCharacters = tool('anime_find_characters', {
     return [{ type: 'text', text: lines.filter((l) => l !== '').join('\n') }];
   },
 });
+
+function renderDescription(description: string | null): string {
+  if (description === null) return 'none';
+  return description.length > 500 ? `${description.slice(0, 500)}…` : description;
+}

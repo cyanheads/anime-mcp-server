@@ -282,6 +282,21 @@ describe('animeGetMedia', () => {
     expect(text).toContain('anilist=true');
   });
 
+  it('keeps the full normalized synopsis in structured output and caps rendered text', async () => {
+    const description = `First paragraph.\n\n${'x'.repeat(550)}`;
+    vi.mocked(anilist.getMediaById).mockResolvedValue({ ...mockDetail, description });
+    vi.mocked(jikan.getMediaFull).mockResolvedValue(null);
+    vi.mocked(kitsu.getAnimeStreamingByMalId).mockResolvedValue(null);
+    const ctx = createMockContext({ errors: animeGetMedia.errors });
+
+    const result = await animeGetMedia.handler(animeGetMedia.input.parse({ id: 11757 }), ctx);
+    const text = (animeGetMedia.format!(result)[0] as { text: string }).text;
+
+    expect(result.description).toBe(description);
+    expect(text).toContain(`${description.slice(0, 500)}…`);
+    expect(text).not.toContain(description);
+  });
+
   it('handles sparse payload: all optional fields null', async () => {
     const sparseDetail = {
       ...mockDetail,

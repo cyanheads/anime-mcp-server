@@ -48,7 +48,7 @@ export const animeGetMedia = tool('anime_get_media', {
     format: z.string().nullable().describe('Format: TV, MOVIE, OVA, ONA, MANGA, NOVEL, etc.'),
     status: z.string().nullable().describe('Production status.'),
     season: z.string().nullable().describe('Broadcast season label, e.g. "FALL 2023", or null.'),
-    description: z.string().nullable().describe('Plot synopsis (HTML stripped), or null.'),
+    description: z.string().nullable().describe('Normalized full plot synopsis text, or null.'),
     source: z
       .string()
       .nullable()

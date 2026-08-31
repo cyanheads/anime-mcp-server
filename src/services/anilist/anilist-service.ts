@@ -7,6 +7,7 @@
 
 import { JsonRpcErrorCode, McpError, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import { fetchWithTimeout, requestContextService, withRetry } from '@cyanheads/mcp-ts-core/utils';
+import { normalizeAniListDescription } from './normalize-description.js';
 import type {
   AiringSchedule,
   CharacterEdge,
@@ -202,7 +203,9 @@ export async function getMediaById(id: number, includeAdult = false): Promise<Me
       id,
       isAdult: includeAdult ? undefined : false,
     });
-    return data.Media;
+    return data.Media
+      ? { ...data.Media, description: normalizeAniListDescription(data.Media.description) }
+      : null;
   } catch (err) {
     // AniList sends HTTP 404 for nonexistent IDs — fetchWithTimeout converts this to
     // a NotFound McpError before we can read the body. Translate to null so callers
@@ -283,13 +286,14 @@ export async function getUpcomingEpisodes(params: {
   daysAhead?: number;
   page?: number;
   perPage?: number;
-}): Promise<AiringSchedule[]> {
+}): Promise<{ airingSchedules: AiringSchedule[]; hasNextPage: boolean }> {
   const now = Math.floor(Date.now() / 1000);
   const end = now + (params.daysAhead ?? 7) * 86_400;
 
   const gql = `
     query UpcomingEpisodes($greaterThan: Int!, $lessThan: Int!, $page: Int, $perPage: Int) {
       Page(page: $page, perPage: $perPage) {
+        pageInfo { hasNextPage }
         airingSchedules(airingAt_greater: $greaterThan, airingAt_lesser: $lessThan) {
           id airingAt episode timeUntilAiring
           media { ${MEDIA_NODE_FRAGMENT} }
@@ -298,14 +302,19 @@ export async function getUpcomingEpisodes(params: {
     }
   `;
 
-  const data = await query<{ Page: { airingSchedules: AiringSchedule[] } }>(gql, {
+  const data = await query<{
+    Page: { airingSchedules: AiringSchedule[]; pageInfo: { hasNextPage: boolean } };
+  }>(gql, {
     greaterThan: now,
     lessThan: end,
     page: params.page ?? 1,
     perPage: Math.min(params.perPage ?? 50, 50),
   });
 
-  return data.Page.airingSchedules;
+  return {
+    airingSchedules: data.Page.airingSchedules,
+    hasNextPage: data.Page.pageInfo.hasNextPage,
+  };
 }
 
 /** Get characters for a media item. */
@@ -314,7 +323,7 @@ export async function getMediaCharacters(params: {
   language?: string | undefined;
   page?: number | undefined;
   perPage?: number | undefined;
-}): Promise<{ characters: CharacterEdge[]; hasNextPage: boolean }> {
+}): Promise<{ characters: CharacterEdge[]; hasNextPage: boolean } | null> {
   const gql = `
     query GetCharacters($id: Int!, $language: StaffLanguage, $page: Int, $perPage: Int) {
       Media(id: $id) {
@@ -357,21 +366,24 @@ export async function getMediaCharacters(params: {
       perPage: Math.min(params.perPage ?? 25, 25),
     });
 
-    if (!data.Media) return { characters: [], hasNextPage: false };
+    if (!data.Media) return null;
 
     return {
       characters: data.Media.characters.edges,
       hasNextPage: data.Media.characters.pageInfo.hasNextPage,
     };
   } catch (err) {
-    if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound)
-      return { characters: [], hasNextPage: false };
+    if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound) return null;
     throw err;
   }
 }
 
 /** Search for a character by name. */
-export async function searchCharacter(name: string): Promise<CharacterWithMedia | null> {
+export async function searchCharacter(
+  name: string,
+  page = 1,
+  perPage = 10,
+): Promise<CharacterWithMedia | null> {
   const gql = `
     query SearchCharacter($search: String!, $page: Int, $perPage: Int) {
       Character(search: $search) {
@@ -397,8 +409,8 @@ export async function searchCharacter(name: string): Promise<CharacterWithMedia 
   try {
     const data = await query<{ Character: CharacterWithMedia | null }>(gql, {
       search: name,
-      page: 1,
-      perPage: 10,
+      page,
+      perPage: Math.min(perPage, 25),
     });
     return data.Character;
   } catch (err) {
@@ -440,11 +452,37 @@ export async function searchStaff(
       page,
       perPage,
     });
-    return data.Staff;
+    return data.Staff
+      ? { ...data.Staff, description: normalizeAniListDescription(data.Staff.description) }
+      : null;
   } catch (err) {
     if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound) return null;
     throw err;
   }
+}
+
+/** Resolve distinct MyAnimeList IDs to AniList media in one batched query. */
+export async function getMediaByMalIds(
+  malIds: number[],
+  mediaType: MediaType,
+): Promise<Map<number, MediaNode>> {
+  const idMalIn = [...new Set(malIds)].filter((id) => id > 0);
+  if (idMalIn.length === 0) return new Map();
+
+  const gql = `
+    query GetMediaByMalIds($idMalIn: [Int], $type: MediaType) {
+      Page(page: 1, perPage: 50) {
+        media(idMal_in: $idMalIn, type: $type) { ${MEDIA_NODE_FRAGMENT} }
+      }
+    }
+  `;
+
+  const data = await query<{ Page: { media: MediaNode[] } }>(gql, { idMalIn, type: mediaType });
+  const mediaByMalId = new Map<number, MediaNode>();
+  for (const media of data.Page.media) {
+    if (media.idMal !== null) mediaByMalId.set(media.idMal, media);
+  }
+  return mediaByMalId;
 }
 
 /** Get recommendations for a media entry. */

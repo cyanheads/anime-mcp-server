@@ -36,7 +36,7 @@ export const animeMediaResource = resource('anime://media/{id}', {
     format: z.string().nullable().describe('Format: TV, MOVIE, OVA, MANGA, etc.'),
     status: z.string().nullable().describe('Production status.'),
     season: z.string().nullable().describe('Broadcast season label, or null.'),
-    description: z.string().nullable().describe('Plot synopsis, or null.'),
+    description: z.string().nullable().describe('Normalized full plot synopsis text, or null.'),
     episodes: z.number().int().nullable().describe('Episode count (anime), or null.'),
     chapters: z.number().int().nullable().describe('Chapter count (manga), or null.'),
     genres: z.array(z.string().describe('A genre label.')).describe('Genre list.'),

@@ -20,6 +20,9 @@ const FormatEnum = z
 const StatusEnum = z
   .enum(['FINISHED', 'RELEASING', 'NOT_YET_RELEASED', 'CANCELLED', 'HIATUS'])
   .describe('Production status filter.');
+const SortEnum = z
+  .enum(['SEARCH_MATCH', 'SCORE_DESC', 'POPULARITY_DESC', 'TRENDING_DESC', 'START_DATE_DESC'])
+  .describe('Search sort field.');
 
 export const animeSearchMedia = tool('anime_search_media', {
   description:
@@ -51,9 +54,7 @@ export const animeSearchMedia = tool('anime_search_media', {
     format: FormatEnum.optional(),
     status: StatusEnum.optional(),
     sort: z
-      .array(
-        z.string().max(50).describe('A sort field string, e.g. "SCORE_DESC" or "POPULARITY_DESC".'),
-      )
+      .array(SortEnum)
       .max(5)
       .optional()
       .describe(
@@ -195,27 +196,37 @@ export const animeSearchMedia = tool('anime_search_media', {
         ctx.enrich.total(jikanResult.pagination.items.total);
       }
 
+      const malIds = jikanResult.results.map((result) => result.mal_id);
+      const resolvedByMalId = await anilist.getMediaByMalIds(malIds, input.media_type);
+
       return {
         source: 'jikan' as const,
         page: jikanResult.pagination?.current_page ?? input.page,
         has_next_page: jikanResult.pagination?.has_next_page ?? false,
         total_results: jikanResult.pagination?.items.total ?? null,
-        results: jikanResult.results.map((r) => ({
-          id: 0, // Jikan doesn't provide AniList IDs
-          id_mal: r.mal_id,
-          title_romaji: r.title,
-          title_english: r.title_english,
-          title_native: null,
-          type: input.media_type,
-          format: r.type ?? null,
-          status: r.status ?? null,
-          season: null,
-          episodes: r.episodes ?? null,
-          chapters: r.chapters ?? null,
-          mean_score: r.score ? Math.round(r.score * 10) : null,
-          is_adult: false,
-          cover_image_url: null,
-        })),
+        results: jikanResult.results.flatMap((result) => {
+          const resolved = resolvedByMalId.get(result.mal_id);
+          if (!resolved) return [];
+
+          return [
+            {
+              id: resolved.id,
+              id_mal: result.mal_id,
+              title_romaji: result.title,
+              title_english: result.title_english,
+              title_native: null,
+              type: input.media_type,
+              format: result.type ?? null,
+              status: result.status ?? null,
+              season: null,
+              episodes: result.episodes ?? null,
+              chapters: result.chapters ?? null,
+              mean_score: result.score ? Math.round(result.score * 10) : null,
+              is_adult: resolved.isAdult,
+              cover_image_url: null,
+            },
+          ];
+        }),
       };
     }
 

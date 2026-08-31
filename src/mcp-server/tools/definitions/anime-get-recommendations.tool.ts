@@ -4,8 +4,8 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import * as anilist from '@/services/anilist/anilist-service.js';
-import type { MediaType } from '@/services/anilist/types.js';
 import * as jikan from '@/services/jikan/jikan-service.js';
 
 export const animeGetRecommendations = tool('anime_get_recommendations', {
@@ -116,20 +116,33 @@ export const animeGetRecommendations = tool('anime_get_recommendations', {
       ),
   }),
 
+  errors: [
+    {
+      reason: 'not_found',
+      code: JsonRpcErrorCode.NotFound,
+      when: 'AniList has no media record for the requested source ID',
+      recovery: 'Use anime_search_media to find a valid AniList ID and retry.',
+    },
+  ],
+
   async handler(input, ctx) {
     ctx.log.info('Fetching recommendations', { id: input.id });
 
-    // Get AniList recs — also fetches idMal for Jikan fan-out
+    // Need media detail for idMal and type
+    const mediaDetail = await anilist.getMediaById(input.id);
+    if (!mediaDetail) {
+      throw ctx.fail('not_found', `No media found with AniList ID ${input.id}`, {
+        ...ctx.recoveryFor('not_found'),
+      });
+    }
+    const idMal = mediaDetail.idMal ?? null;
+    const mediaType = mediaDetail.type;
+
     const anilistRecs = await anilist.getRecommendations({
       mediaId: input.id,
       page: input.page,
       perPage: input.per_page,
     });
-
-    // Need media detail for idMal and type
-    const mediaDetail = await anilist.getMediaById(input.id);
-    const idMal = mediaDetail?.idMal ?? null;
-    const mediaType: MediaType = mediaDetail?.type ?? 'ANIME';
 
     // Fetch Jikan recs (supplement — degrades gracefully)
     let jikanRecs: Awaited<ReturnType<typeof jikan.getRecommendations>> = [];

@@ -176,14 +176,15 @@ export const animeGetSchedule = tool('anime_get_schedule', {
     // upcoming mode
     ctx.log.info('Fetching upcoming episodes', { daysAhead: input.days_ahead });
 
-    const schedules = await anilist.getUpcomingEpisodes({
+    const upcoming = await anilist.getUpcomingEpisodes({
       daysAhead: input.days_ahead,
       page: input.page,
       perPage: input.per_page,
     });
 
-    // Sort by airing time
-    schedules.sort((a, b) => a.airingAt - b.airingAt);
+    const schedules = upcoming.airingSchedules
+      .filter((schedule) => input.include_adult || !schedule.media.isAdult)
+      .sort((a, b) => a.airingAt - b.airingAt);
 
     if (schedules.length === 0) {
       ctx.enrich.notice(
@@ -195,7 +196,7 @@ export const animeGetSchedule = tool('anime_get_schedule', {
       mode: 'upcoming' as const,
       season_label: null,
       page: input.page,
-      has_next_page: schedules.length >= input.per_page,
+      has_next_page: upcoming.hasNextPage,
       total_results: null,
       entries: schedules.map((s) => ({
         id: s.media.id,

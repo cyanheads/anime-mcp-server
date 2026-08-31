@@ -57,6 +57,22 @@ const mockAiringSchedules: AiringSchedule[] = [
   },
 ];
 
+const adultSchedule: AiringSchedule = {
+  ...mockAiringSchedules[0]!,
+  id: 2,
+  media: {
+    ...mockMediaNode,
+    id: 999,
+    isAdult: true,
+    title: { ...mockMediaNode.title, romaji: 'Adult Example', english: null },
+  },
+};
+
+const upcomingPage = {
+  airingSchedules: mockAiringSchedules,
+  hasNextPage: false,
+};
+
 describe('animeGetSchedule', () => {
   beforeEach(() => {
     vi.resetAllMocks();
@@ -130,7 +146,7 @@ describe('animeGetSchedule', () => {
   });
 
   it('returns upcoming episodes when mode is "upcoming"', async () => {
-    vi.mocked(anilist.getUpcomingEpisodes).mockResolvedValue(mockAiringSchedules);
+    vi.mocked(anilist.getUpcomingEpisodes).mockResolvedValue(upcomingPage);
     const ctx = createMockContext({ errors: animeGetSchedule.errors });
     const input = animeGetSchedule.input.parse({ mode: 'upcoming', days_ahead: 7 });
 
@@ -141,6 +157,39 @@ describe('animeGetSchedule', () => {
     expect(result.entries).toHaveLength(1);
     expect(result.entries[0]!.next_episode).toBe(5);
     expect(result.entries[0]!.next_airing_at_utc).toBeTruthy();
+  });
+
+  it('filters adult upcoming schedules by default and includes them when requested', async () => {
+    vi.mocked(anilist.getUpcomingEpisodes).mockResolvedValue({
+      airingSchedules: [...mockAiringSchedules, adultSchedule],
+      hasNextPage: false,
+    });
+    const defaultResult = await animeGetSchedule.handler(
+      animeGetSchedule.input.parse({ mode: 'upcoming' }),
+      createMockContext({ errors: animeGetSchedule.errors }),
+    );
+    const adultResult = await animeGetSchedule.handler(
+      animeGetSchedule.input.parse({ mode: 'upcoming', include_adult: true }),
+      createMockContext({ errors: animeGetSchedule.errors }),
+    );
+
+    expect(defaultResult.entries.map((entry) => entry.id)).toEqual([154587]);
+    expect(adultResult.entries.map((entry) => entry.id)).toEqual([154587, 999]);
+  });
+
+  it('preserves upstream hasNextPage when filtering leaves an empty visible page', async () => {
+    vi.mocked(anilist.getUpcomingEpisodes).mockResolvedValue({
+      airingSchedules: [adultSchedule],
+      hasNextPage: true,
+    });
+
+    const result = await animeGetSchedule.handler(
+      animeGetSchedule.input.parse({ mode: 'upcoming', page: 3, per_page: 1 }),
+      createMockContext({ errors: animeGetSchedule.errors }),
+    );
+
+    expect(result.entries).toEqual([]);
+    expect(result.has_next_page).toBe(true);
   });
 
   it('applies defaults: mode defaults parsed correctly', () => {
@@ -168,7 +217,7 @@ describe('animeGetSchedule', () => {
   });
 
   it('formats upcoming schedule output with countdown', async () => {
-    vi.mocked(anilist.getUpcomingEpisodes).mockResolvedValue(mockAiringSchedules);
+    vi.mocked(anilist.getUpcomingEpisodes).mockResolvedValue(upcomingPage);
     const ctx = createMockContext({ errors: animeGetSchedule.errors });
     const input = animeGetSchedule.input.parse({ mode: 'upcoming' });
     const result = await animeGetSchedule.handler(input, ctx);

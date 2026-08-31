@@ -122,6 +122,20 @@ describe('animeMediaResource', () => {
     expect(result.streaming_count).toBe(1);
   });
 
+  it('preserves the complete normalized AniList description', async () => {
+    const description = `First paragraph.\n\n${'x'.repeat(550)}`;
+    vi.mocked(anilist.getMediaById).mockResolvedValue({ ...mockDetail, description });
+    vi.mocked(jikan.getMediaFull).mockResolvedValue(null);
+    vi.mocked(kitsu.getAnimeStreamingByMalId).mockResolvedValue(null);
+
+    const result = await animeMediaResource.handler(
+      animeMediaResource.params!.parse({ id: '11757' }),
+      createMockContext({ tenantId: 'test-tenant' }),
+    );
+
+    expect(result.description).toBe(description);
+  });
+
   it('throws notFound for a non-numeric ID string', async () => {
     const ctx = createMockContext({ tenantId: 'test-tenant' });
     const params = animeMediaResource.params!.parse({ id: 'not-a-number' });

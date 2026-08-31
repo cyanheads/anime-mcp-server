@@ -140,6 +140,23 @@ describe('animeFindCharacters', () => {
     expect(result.voice_actor).toBeNull();
   });
 
+  it('throws media_not_found when the AniList media ID does not exist', async () => {
+    vi.mocked(anilist.getMediaCharacters).mockResolvedValue(null);
+    const ctx = createMockContext({ errors: animeFindCharacters.errors });
+    const input = animeFindCharacters.input.parse({ id: 999_999_999 });
+
+    await expect(animeFindCharacters.handler(input, ctx)).rejects.toMatchObject({
+      code: JsonRpcErrorCode.NotFound,
+      message: 'No media found with AniList ID 999999999',
+      data: {
+        reason: 'media_not_found',
+        recovery: {
+          hint: 'Use anime_search_media to find a valid AniList media ID and retry.',
+        },
+      },
+    });
+  });
+
   it('returns character info in by_character mode when character_name is provided', async () => {
     vi.mocked(anilist.searchCharacter).mockResolvedValue(mockCharacterWithMedia);
     const ctx = createMockContext({ errors: animeFindCharacters.errors });
@@ -149,7 +166,7 @@ describe('animeFindCharacters', () => {
 
     expect(result.mode).toBe('by_character');
     expect(result.characters[0]!.character_id).toBe(40882);
-    expect(vi.mocked(anilist.searchCharacter)).toHaveBeenCalledWith('Okabe');
+    expect(vi.mocked(anilist.searchCharacter)).toHaveBeenCalledWith('Okabe', 1, 25);
   });
 
   it('by_character mode maps media appearances with VAs from edges', async () => {
@@ -167,6 +184,46 @@ describe('animeFindCharacters', () => {
     expect(result.characters[0]!.voice_actors[0]!.va_name).toBe('Mamoru Miyano');
   });
 
+  it('by_character mode forwards pagination and returns actionable media context', async () => {
+    const secondMedia = {
+      ...mockMediaNode,
+      id: 14247,
+      format: 'MOVIE' as const,
+      title: { ...mockMediaNode.title, romaji: 'Steins;Gate: The Movie' },
+    };
+    vi.mocked(anilist.searchCharacter).mockResolvedValue({
+      ...mockCharacterWithMedia,
+      media: {
+        pageInfo: { hasNextPage: false, currentPage: 2 },
+        nodes: [secondMedia],
+        edges: [{ characterRole: 'MAIN', voiceActors: [] }],
+      },
+    });
+    const ctx = createMockContext({ errors: animeFindCharacters.errors });
+    const input = animeFindCharacters.input.parse({
+      character_name: 'Okabe',
+      page: 2,
+      per_page: 1,
+    });
+
+    const result = await animeFindCharacters.handler(input, ctx);
+
+    expect(anilist.searchCharacter).toHaveBeenCalledWith('Okabe', 2, 1);
+    expect(result.characters).toEqual([
+      expect.objectContaining({
+        media_id: 14247,
+        media_title: 'Steins;Gate: The Movie',
+        media_format: 'MOVIE',
+        role: 'MAIN',
+      }),
+    ]);
+    const text = (animeFindCharacters.format!(result)[0] as { text: string }).text;
+    expect(text).toContain('Steins;Gate: The Movie');
+    expect(text).toContain('AL:14247');
+    expect(text).toContain('MOVIE');
+    expect(text).toContain('MAIN');
+  });
+
   it('returns VA detail in by_voice_actor mode when voice_actor_name is provided', async () => {
     vi.mocked(anilist.searchStaff).mockResolvedValue(mockStaffWithRoles);
     const ctx = createMockContext({ errors: animeFindCharacters.errors });
@@ -179,6 +236,20 @@ describe('animeFindCharacters', () => {
     expect(result.voice_actor!.va_id).toBe(95061);
     expect(result.voice_actor!.roles).toHaveLength(1);
     expect(result.characters).toHaveLength(0);
+  });
+
+  it('caps the rendered voice-actor description without truncating structured output', async () => {
+    const description = `First paragraph.\n\n${'x'.repeat(550)}`;
+    vi.mocked(anilist.searchStaff).mockResolvedValue({ ...mockStaffWithRoles, description });
+    const ctx = createMockContext({ errors: animeFindCharacters.errors });
+    const input = animeFindCharacters.input.parse({ voice_actor_name: 'Miyano' });
+
+    const result = await animeFindCharacters.handler(input, ctx);
+    const text = (animeFindCharacters.format!(result)[0] as { text: string }).text;
+
+    expect(result.voice_actor?.description).toBe(description);
+    expect(text).toContain(`description:${description.slice(0, 500)}…`);
+    expect(text).not.toContain(description);
   });
 
   it('throws ctx.fail("missing_identifier") when no identifier is provided', async () => {
@@ -356,6 +427,32 @@ describe('animeFindCharacters tool contract', () => {
         expect.objectContaining({
           type: 'text',
           text: expect.stringContaining('No characters found.'),
+        }),
+      ]),
+    );
+  });
+
+  it('returns media_not_found on both public error surfaces', async () => {
+    vi.mocked(anilist.getMediaCharacters).mockResolvedValue(null);
+
+    const result = await runToolContract(animeFindCharacters, { id: 999_999_999 });
+    const recovery = 'Use anime_search_media to find a valid AniList media ID and retry.';
+
+    expect(result).toMatchObject({
+      isError: true,
+      structuredContent: {
+        error: {
+          code: JsonRpcErrorCode.NotFound,
+          message: 'No media found with AniList ID 999999999',
+          data: { reason: 'media_not_found', recovery: { hint: recovery } },
+        },
+      },
+    });
+    expect(result.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'text',
+          text: expect.stringContaining(`Recovery: ${recovery}`),
         }),
       ]),
     );
