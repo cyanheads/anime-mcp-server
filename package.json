@@ -1,6 +1,6 @@
 {
   "name": "@cyanheads/anime-mcp-server",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "mcpName": "io.github.cyanheads/anime-mcp-server",
   "description": "Search anime/manga, get full detail, franchise watch order, seasonal schedule, characters, rankings, and studio filmography via MCP. STDIO or Streamable HTTP.",
   "type": "module",

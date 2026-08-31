@@ -1,6 +1,6 @@
 # anime-mcp-server - Directory Structure
 
-Generated on: 2026-08-21 15:16:39
+Generated on: 2026-08-31 02:59:07
 
 ```text
 anime-mcp-server/
@@ -151,6 +151,7 @@ anime-mcp-server/
 │   ├── services/
 │   │   ├── anilist/
 │   │   │   ├── anilist-service.ts
+│   │   │   ├── normalize-description.ts
 │   │   │   └── types.ts
 │   │   ├── jikan/
 │   │   │   ├── jikan-service.ts
@@ -163,6 +164,9 @@ anime-mcp-server/
 │   ├── prompts/
 │   ├── resources/
 │   │   └── anime-media.resource.test.ts
+│   ├── services/
+│   │   └── anilist/
+│   │       └── anilist-service.test.ts
 │   └── tools/
 │       ├── anime-find-characters.tool.test.ts
 │       ├── anime-get-media.tool.test.ts
