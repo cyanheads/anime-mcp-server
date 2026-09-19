@@ -6,7 +6,12 @@
  */
 
 import { JsonRpcErrorCode, McpError, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
-import { fetchWithTimeout, requestContextService, withRetry } from '@cyanheads/mcp-ts-core/utils';
+import {
+  createPacer,
+  fetchWithTimeout,
+  requestContextService,
+  withRetry,
+} from '@cyanheads/mcp-ts-core/utils';
 import { normalizeAniListDescription } from './normalize-description.js';
 import type {
   AiringSchedule,
@@ -33,74 +38,51 @@ const REQUEST_CONTEXT = requestContextService.createRequestContext({
   operation: 'anilist-service',
 });
 
-// ─── Rate-limit state ─────────────────────────────────────────────────────────
+const pacer = createPacer({
+  name: 'anilist',
+  limits: [{ requests: 30, perMs: 30_000 }],
+  cooldown: { baseMs: 30_000, maxMs: 30_000 },
+});
 
-/** Simple in-process rate-limit guard: 30 req / 30s. */
-let _windowStart = 0;
-let _windowCount = 0;
-
-/**
- * Block if we've hit the AniList rate limit.
- * Waits out the current 30s window before resuming.
- */
-async function checkRateLimit(): Promise<void> {
-  const now = Date.now();
-  if (now - _windowStart > 30_000) {
-    _windowStart = now;
-    _windowCount = 0;
-  }
-  _windowCount++;
-  if (_windowCount > 29) {
-    const wait = 30_000 - (now - _windowStart) + 100;
-    await new Promise((r) => setTimeout(r, wait));
-    _windowStart = Date.now();
-    _windowCount = 1;
-  }
+/** Release queued AniList work during server shutdown. */
+export function shutdownAniList(): void {
+  pacer.dispose();
 }
 
 // ─── Core query executor ──────────────────────────────────────────────────────
 
 /** Execute a GraphQL query against AniList. Returns the `data` payload. */
-async function query<T>(gql: string, variables: Record<string, unknown>): Promise<T> {
-  await checkRateLimit();
-
+function query<T>(gql: string, variables: Record<string, unknown>): Promise<T> {
   return withRetry(
-    async () => {
-      const resp = await fetchWithTimeout(ANILIST_URL, TIMEOUT_MS, REQUEST_CONTEXT, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ query: gql, variables }),
-      });
+    ({ signal }) =>
+      pacer.run(
+        async () => {
+          const resp = await fetchWithTimeout(ANILIST_URL, TIMEOUT_MS, REQUEST_CONTEXT, {
+            signal,
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify({ query: gql, variables }),
+          });
 
-      if (resp.status === 429) {
-        // Back off the full 30s window
-        await new Promise((r) => setTimeout(r, 30_000));
-        throw serviceUnavailable('AniList rate limit exceeded', { status: 429 });
-      }
+          const json = (await resp.json()) as {
+            data: T;
+            errors?: Array<{ message: string; status: number }>;
+          };
 
-      // AniList sends 404 with data.{entity}: null for nonexistent IDs — read the body
-      // before deciding whether to treat it as an error.
-      if (!resp.ok && resp.status !== 200 && resp.status !== 404) {
-        throw serviceUnavailable(`AniList returned HTTP ${resp.status}`, { status: resp.status });
-      }
+          // AniList can return HTTP 200 on GraphQL errors.
+          // When data is present (e.g. data.Media: null on not-found), return it so
+          // callers can check for null and throw the appropriate domain error.
+          if (json.errors?.length && !json.data) {
+            const firstErr = json.errors[0];
+            throw serviceUnavailable(`AniList GraphQL error: ${firstErr?.message ?? 'unknown'}`, {
+              status: firstErr?.status,
+            });
+          }
 
-      const json = (await resp.json()) as {
-        data: T;
-        errors?: Array<{ message: string; status: number }>;
-      };
-
-      // AniList returns HTTP 200 (or 404) even on GraphQL errors.
-      // When data is present (e.g. data.Media: null on not-found), return it so
-      // callers can check for null and throw the appropriate domain error.
-      if (json.errors?.length && !json.data) {
-        const firstErr = json.errors[0];
-        throw serviceUnavailable(`AniList GraphQL error: ${firstErr?.message ?? 'unknown'}`, {
-          status: firstErr?.status,
-        });
-      }
-
-      return json.data;
-    },
+          return json.data;
+        },
+        { signal },
+      ),
     {
       maxRetries: 3,
       baseDelayMs: 1000,

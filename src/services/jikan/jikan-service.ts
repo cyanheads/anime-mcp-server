@@ -5,8 +5,14 @@
  * @module services/jikan/jikan-service
  */
 
-import { serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
-import { fetchWithTimeout, requestContextService, withRetry } from '@cyanheads/mcp-ts-core/utils';
+import { McpError } from '@cyanheads/mcp-ts-core/errors';
+import {
+  createPacer,
+  defaultIsTransient,
+  fetchWithTimeout,
+  requestContextService,
+  withRetry,
+} from '@cyanheads/mcp-ts-core/utils';
 import type {
   JikanMedia,
   JikanPagination,
@@ -21,32 +27,23 @@ const TIMEOUT_MS = 15_000;
 const REQUEST_CONTEXT = requestContextService.createRequestContext({ operation: 'jikan-service' });
 const MIN_INTERVAL_MS = 350;
 
-// ─── Rate-limit guard ─────────────────────────────────────────────────────────
+const pacer = createPacer({ name: 'jikan', minStartGapMs: MIN_INTERVAL_MS });
 
-let _lastCallAt = 0;
-
-async function throttle(): Promise<void> {
-  const now = Date.now();
-  const elapsed = now - _lastCallAt;
-  if (elapsed < MIN_INTERVAL_MS) {
-    await new Promise((r) => setTimeout(r, MIN_INTERVAL_MS - elapsed));
-  }
-  _lastCallAt = Date.now();
+/** Release queued Jikan work during server shutdown. */
+export function shutdownJikan(): void {
+  pacer.dispose();
 }
 
 // ─── Core fetch ───────────────────────────────────────────────────────────────
 
 /**
- * Execute a GET request against Jikan. Returns parsed JSON body or null if not found.
- * Jikan returns HTTP 5xx for nonexistent MAL IDs (upstream proxy issue) — treat 5xx on
- * ID lookups as "not found or MAL unavailable" rather than a server error.
+ * Execute a GET against Jikan; HTTP failures retain the framework classification.
+ * Tool callers decide whether a failed supplement can be omitted.
  */
-async function get<T>(
+function get<T>(
   path: string,
   params?: Record<string, string | number | undefined>,
 ): Promise<T | null> {
-  await throttle();
-
   const url = new URL(`${JIKAN_BASE}${path}`);
   if (params) {
     for (const [k, v] of Object.entries(params)) {
@@ -55,38 +52,36 @@ async function get<T>(
   }
 
   return withRetry(
-    async () => {
-      const resp = await fetchWithTimeout(url.toString(), TIMEOUT_MS, REQUEST_CONTEXT);
-
-      if (resp.status === 404) return null;
-
-      // Jikan returns 500 for nonexistent MAL IDs (UpstreamException) — treat as not found
-      if (resp.status >= 500) return null;
-
-      if (!resp.ok) {
-        throw serviceUnavailable(`Jikan returned HTTP ${resp.status}`, { status: resp.status });
-      }
-
-      return (await resp.json()) as T;
-    },
+    ({ signal }) =>
+      pacer.run(
+        async () => {
+          const resp = await fetchWithTimeout(url.toString(), TIMEOUT_MS, REQUEST_CONTEXT, {
+            signal,
+          });
+          return (await resp.json()) as T;
+        },
+        { signal },
+      ),
     {
       maxRetries: 2,
       baseDelayMs: 1000,
       maxDelayMs: 5000,
       operation: 'jikan-get',
       context: REQUEST_CONTEXT,
-      // Don't retry 5xx — they're "not found" for Jikan
-      isTransient: (e) => {
-        const msg = e instanceof Error ? e.message.toLowerCase() : '';
-        return msg.includes('timeout') || msg.includes('serviceunavailable');
-      },
+      // Jikan can report missing MAL IDs as 5xx; those fail without repeated lookups.
+      isTransient: (error) =>
+        !(
+          error instanceof McpError &&
+          typeof error.data?.status === 'number' &&
+          error.data.status >= 500
+        ) && defaultIsTransient(error),
     },
   );
 }
 
 // ─── Service methods ──────────────────────────────────────────────────────────
 
-/** Get full detail for one anime or manga by MAL ID. Returns null if not found. */
+/** Get full detail by MAL ID. Returns null for empty data; HTTP failures throw. */
 export async function getMediaFull(
   malId: number,
   mediaType: 'ANIME' | 'MANGA',

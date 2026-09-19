@@ -9,19 +9,20 @@ import { createApp } from '@cyanheads/mcp-ts-core';
 import { allPromptDefinitions } from './mcp-server/prompts/index.js';
 import { allResourceDefinitions } from './mcp-server/resources/index.js';
 import { allToolDefinitions } from './mcp-server/tools/index.js';
+import { shutdownAniList } from './services/anilist/anilist-service.js';
+import { shutdownJikan } from './services/jikan/jikan-service.js';
 
 await createApp({
   name: 'anime-mcp-server',
   title: 'anime-mcp-server',
+  sessionMode: 'stateless',
+  teardown() {
+    shutdownAniList();
+    shutdownJikan();
+  },
   tools: allToolDefinitions,
   resources: allResourceDefinitions,
   prompts: allPromptDefinitions,
-  instructions: `Anime and manga data from AniList, MAL (via Jikan), and Kitsu.
-- Use anime_search_media to discover AniList IDs, then anime_get_media for full detail.
-- Use anime_get_relations to build watch/read order for a franchise.
-- Use anime_get_schedule for seasonal airing schedules or upcoming episodes.
-- Use anime_find_characters for cast lookup or voice actor role search.
-- Scores: AniList and MAL scores are surfaced separately — never blended.
-- Adult content: off by default; opt in via include_adult: true.
-- Rate limits: AniList 30 req/30s, Jikan ~3 req/sec. Service layer handles backoff automatically.`,
+  instructions:
+    'Search anime and manga through anime_search_media to discover AniList IDs, then use anime_get_media for detail, anime_get_relations for franchise order, anime_get_schedule for airing dates, and anime_find_characters for cast or voice actors. AniList and MAL scores remain separate, and adult content requires include_adult: true. AniList, Jikan, and Kitsu supply the data; requests are paced for AniList at 30 starts per 30 seconds and Jikan at least 350 milliseconds apart.',
 });
