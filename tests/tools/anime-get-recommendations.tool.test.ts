@@ -336,7 +336,7 @@ describe('animeGetRecommendations tool contract', () => {
 
     expect(result.isError).toBe(true);
     expect(result.structuredContent).toMatchObject({
-      error: { code: JsonRpcErrorCode.ValidationError },
+      error: { code: JsonRpcErrorCode.InvalidParams },
     });
   });
 });

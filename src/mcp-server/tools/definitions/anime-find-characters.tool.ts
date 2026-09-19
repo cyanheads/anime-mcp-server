@@ -334,7 +334,11 @@ export const animeFindCharacters = tool('anime_find_characters', {
     // Mode C: by voice actor name
     const vaName = input.voice_actor_name;
     if (!vaName) {
-      throw ctx.fail('missing_identifier', 'voice_actor_name is required for name-based lookup');
+      throw ctx.fail(
+        'missing_identifier',
+        'voice_actor_name is required for name-based lookup',
+        ctx.recoveryFor('missing_identifier'),
+      );
     }
 
     ctx.log.info('Searching VA by name', { name: vaName });

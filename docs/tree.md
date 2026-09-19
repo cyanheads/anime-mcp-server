@@ -1,6 +1,6 @@
 # anime-mcp-server - Directory Structure
 
-Generated on: 2026-08-31 02:59:07
+Generated on: 2026-09-19 18:41:22
 
 ```text
 anime-mcp-server/
@@ -14,6 +14,8 @@ anime-mcp-server/
 │   │   ├── bug_report.yml
 │   │   ├── config.yml
 │   │   └── feature_request.yml
+│   ├── workflows/
+│   │   └── codeql.yml
 │   ├── CODE_OF_CONDUCT.md
 │   ├── CONTRIBUTING.md
 │   ├── FUNDING.yml
@@ -27,23 +29,7 @@ anime-mcp-server/
 ├── docs/
 │   ├── design.md
 │   └── idea.md
-├── scripts/
-│   ├── build-changelog.ts
-│   ├── build.ts
-│   ├── check-dependency-specifiers.ts
-│   ├── check-docs-sync.ts
-│   ├── check-framework-antipatterns.ts
-│   ├── check-skill-versions.ts
-│   ├── check-skills-sync.ts
-│   ├── clean-mcpb.ts
-│   ├── clean.ts
-│   ├── devcheck.ts
-│   ├── lint-mcp.ts
-│   ├── lint-packaging.ts
-│   ├── list-skills.ts
-│   ├── release-github.ts
-│   └── tree.ts
-├── skills/
+├── framework-skills/
 │   ├── add-app-tool/
 │   │   └── SKILL.md
 │   ├── add-prompt/
@@ -114,6 +100,8 @@ anime-mcp-server/
 │   │   └── SKILL.md
 │   ├── release-and-publish/
 │   │   └── SKILL.md
+│   ├── release-pr-review/
+│   │   └── SKILL.md
 │   ├── report-issue-framework/
 │   │   └── SKILL.md
 │   ├── report-issue-local/
@@ -128,6 +116,22 @@ anime-mcp-server/
 │   │   └── SKILL.md
 │   └── tool-defs-analysis/
 │       └── SKILL.md
+├── scripts/
+│   ├── build-changelog.ts
+│   ├── build.ts
+│   ├── check-dependency-specifiers.ts
+│   ├── check-docs-sync.ts
+│   ├── check-framework-antipatterns.ts
+│   ├── check-skill-versions.ts
+│   ├── check-skills-sync.ts
+│   ├── clean-mcpb.ts
+│   ├── clean.ts
+│   ├── devcheck.ts
+│   ├── lint-mcp.ts
+│   ├── lint-packaging.ts
+│   ├── list-skills.ts
+│   ├── release-github.ts
+│   └── tree.ts
 ├── src/
 │   ├── mcp-server/
 │   │   ├── prompts/
@@ -151,6 +155,7 @@ anime-mcp-server/
 │   ├── services/
 │   │   ├── anilist/
 │   │   │   ├── anilist-service.ts
+│   │   │   ├── normalize-description.test.ts
 │   │   │   ├── normalize-description.ts
 │   │   │   └── types.ts
 │   │   ├── jikan/
@@ -165,17 +170,21 @@ anime-mcp-server/
 │   ├── resources/
 │   │   └── anime-media.resource.test.ts
 │   ├── services/
-│   │   └── anilist/
-│   │       └── anilist-service.test.ts
-│   └── tools/
-│       ├── anime-find-characters.tool.test.ts
-│       ├── anime-get-media.tool.test.ts
-│       ├── anime-get-rankings.tool.test.ts
-│       ├── anime-get-recommendations.tool.test.ts
-│       ├── anime-get-relations.tool.test.ts
-│       ├── anime-get-schedule.tool.test.ts
-│       ├── anime-get-studio.tool.test.ts
-│       └── anime-search-media.tool.test.ts
+│   │   ├── anilist/
+│   │   │   └── anilist-service.test.ts
+│   │   ├── jikan-service.test.ts
+│   │   └── pacing.test.ts
+│   ├── tools/
+│   │   ├── anime-find-characters.tool.test.ts
+│   │   ├── anime-get-media.tool.test.ts
+│   │   ├── anime-get-rankings.tool.test.ts
+│   │   ├── anime-get-recommendations.tool.test.ts
+│   │   ├── anime-get-relations.tool.test.ts
+│   │   ├── anime-get-schedule.tool.test.ts
+│   │   ├── anime-get-studio.tool.test.ts
+│   │   └── anime-search-media.tool.test.ts
+│   ├── description-contract.test.ts
+│   └── session-mode.test.ts
 ├── .dockerignore
 ├── .env.example
 ├── .gitattributes
