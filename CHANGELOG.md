@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.8](changelog/0.1.x/0.1.8.md) — 2026-09-19 · 🛡️ Security
+
+Defaults HTTP to stateless sessions, paces AniList and Jikan requests, and decodes nested entity references once.
+
 ## [0.1.7](changelog/0.1.x/0.1.7.md) — 2026-08-30
 
 Makes AniList search, character, recommendation, and schedule results more actionable and consistent.
