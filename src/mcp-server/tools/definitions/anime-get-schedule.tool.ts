@@ -6,12 +6,22 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import * as anilist from '@/services/anilist/anilist-service.js';
+import {
+  exactResultCount,
+  nextPageOutOfReach,
+  nextPageReachable,
+  PAGE_DEPTH_EDGE_NOTICE,
+  pastEndNotice,
+} from '@/services/anilist/pagination.js';
 
 const SeasonEnum = z
   .enum(['WINTER', 'SPRING', 'SUMMER', 'FALL'])
   .describe(
     'Anime broadcast season. WINTER=Jan–Mar, SPRING=Apr–Jun, SUMMER=Jul–Sep, FALL=Oct–Dec.',
   );
+
+/** Days ahead the upcoming window covers when the caller does not set days_ahead. */
+const DEFAULT_DAYS_AHEAD = 7;
 
 export const animeGetSchedule = tool('anime_get_schedule', {
   description:
@@ -27,25 +37,40 @@ export const animeGetSchedule = tool('anime_get_schedule', {
         '"season": all anime from a specific season/year. Requires season and season_year. ' +
           '"upcoming": next airing episode for each currently-airing title within days_ahead window.',
       ),
-    season: SeasonEnum.optional(),
+    season: SeasonEnum.optional().describe(
+      'Season to list. Required with mode "season"; rejected with mode "upcoming".',
+    ),
     season_year: z
       .number()
       .int()
       .min(1940)
       .max(2100)
       .optional()
-      .describe('4-digit year. Required with mode "season".'),
+      .describe('4-digit year. Required with mode "season"; rejected with mode "upcoming".'),
     days_ahead: z
       .number()
       .int()
       .min(1)
       .max(30)
-      .default(7)
+      .optional()
       .describe(
-        'Days ahead to look for upcoming episodes. Used only in "upcoming" mode. Default 7.',
+        'Days ahead to look for upcoming episodes, 1–30. Mode "upcoming" only (rejected with mode "season"); 7 when omitted.',
       ),
-    page: z.number().int().min(1).default(1).describe('1-based page number.'),
-    per_page: z.number().int().min(1).max(50).default(25).describe('Results per page. Maximum 50.'),
+    page: z
+      .number()
+      .int()
+      .min(1)
+      .default(1)
+      .describe(
+        '1-based page number. AniList serves only the first 5,000 entries of a list, so page × per_page must stay at or below 5,000.',
+      ),
+    per_page: z
+      .number()
+      .int()
+      .min(1)
+      .max(50)
+      .default(25)
+      .describe('Results per page. Maximum 50; page × per_page must stay at or below 5,000.'),
     include_adult: z.boolean().default(false).describe('Include adult/NSFW titles. Default false.'),
   }),
 
@@ -54,13 +79,15 @@ export const animeGetSchedule = tool('anime_get_schedule', {
       .string()
       .optional()
       .describe(
-        'Recovery guidance when entries is empty — echoes the applied mode/season and suggests how to broaden.',
+        'Set when entries is empty — echoes the applied mode/season and how to broaden it, says the page is past the end of the list, or (upcoming mode) says every episode on the page was an adult title hidden by include_adult. Also set on the last season page AniList serves (its 5,000-entry reach) while has_next_page is still true.',
       ),
     totalCount: z
       .number()
       .int()
       .optional()
-      .describe('Total entries in the season, when AniList reports it (season mode only).'),
+      .describe(
+        'Exact number of titles in the season, set only on its final page (0 for an empty first page); season mode only. Use has_next_page to paginate.',
+      ),
   },
 
   output: z.object({
@@ -70,12 +97,16 @@ export const animeGetSchedule = tool('anime_get_schedule', {
       .nullable()
       .describe('Human-readable season label, e.g. "FALL 2024", or null for upcoming mode.'),
     page: z.number().int().describe('Current page number.'),
-    has_next_page: z.boolean().describe('Whether more pages are available.'),
+    has_next_page: z
+      .boolean()
+      .describe('Whether more pages are available. Drives pagination; stop when false.'),
     total_results: z
       .number()
       .int()
       .nullable()
-      .describe('Total entries in this season, or null for upcoming mode.'),
+      .describe(
+        'Exact number of titles in the season, present only on its final page (has_next_page false) and 0 for an empty first page. Null on every other page and always null in upcoming mode.',
+      ),
     entries: z
       .array(
         z
@@ -116,9 +147,41 @@ export const animeGetSchedule = tool('anime_get_schedule', {
       recovery:
         'Provide both season (WINTER/SPRING/SUMMER/FALL) and season_year (e.g. 2024) when using mode "season".',
     },
+    {
+      reason: 'conflicting_inputs',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'mode "upcoming" is sent with season or season_year, or mode "season" with days_ahead',
+      recovery:
+        'Drop the fields the chosen mode does not use: season and season_year apply only to mode "season", and days_ahead applies only to mode "upcoming".',
+    },
+    {
+      reason: 'page_depth_exceeded',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'page × per_page reaches past the first 5,000 entries, which AniList refuses to serve',
+      recovery:
+        'AniList serves only the first 5,000 entries of a result list, so page × per_page must stay at or below 5,000. Narrow the criteria so fewer entries match, or request a lower page.',
+      thrownBy: 'service',
+    },
   ],
 
   async handler(input, ctx) {
+    const irrelevant =
+      input.mode === 'upcoming'
+        ? [
+            ...(input.season ? ['season'] : []),
+            ...(input.season_year !== undefined ? ['season_year'] : []),
+          ]
+        : input.days_ahead !== undefined
+          ? ['days_ahead']
+          : [];
+    if (irrelevant.length > 0) {
+      throw ctx.fail(
+        'conflicting_inputs',
+        `mode "${input.mode}" does not use ${irrelevant.join(', ')}; drop ${irrelevant.length > 1 ? 'them' : 'it'} or switch mode`,
+        ctx.recoveryFor('conflicting_inputs'),
+      );
+    }
+
     if (input.mode === 'season') {
       if (!input.season || !input.season_year) {
         throw ctx.fail(
@@ -138,12 +201,28 @@ export const animeGetSchedule = tool('anime_get_schedule', {
         includeAdult: input.include_adult,
       });
 
+      const seasonLabel = `${input.season} ${input.season_year}`;
+      const { currentPage, hasNextPage, perPage } = page.pageInfo;
+      const total = exactResultCount({
+        page: currentPage,
+        perPage,
+        hasNextPage,
+        entriesOnPage: page.media.length,
+      });
+      if (total !== null) ctx.enrich.total(total);
+
+      const notices: string[] = [];
       if (page.media.length === 0) {
-        ctx.enrich.notice(
-          `No entries for ${input.season} ${input.season_year}. Verify the season/year is correct, or try an adjacent season.`,
+        notices.push(
+          currentPage > 1
+            ? pastEndNotice(currentPage, `the ${seasonLabel} schedule`)
+            : `No entries for ${seasonLabel}. Verify the season/year is correct, or try an adjacent season.`,
         );
       }
-      if (page.pageInfo.total != null) ctx.enrich.total(page.pageInfo.total);
+      if (nextPageOutOfReach({ page: currentPage, perPage, hasNextPage })) {
+        notices.push(PAGE_DEPTH_EDGE_NOTICE);
+      }
+      if (notices.length > 0) ctx.enrich.notice(notices.join(' '));
 
       type SeasonMediaNode = (typeof page.media)[0] & {
         nextAiringEpisode?: { airingAt: number; episode: number; timeUntilAiring: number } | null;
@@ -151,10 +230,10 @@ export const animeGetSchedule = tool('anime_get_schedule', {
 
       return {
         mode: 'season' as const,
-        season_label: `${input.season} ${input.season_year}`,
-        page: page.pageInfo.currentPage,
-        has_next_page: page.pageInfo.hasNextPage,
-        total_results: page.pageInfo.total ?? null,
+        season_label: seasonLabel,
+        page: currentPage,
+        has_next_page: hasNextPage,
+        total_results: total,
         entries: page.media.map((m: SeasonMediaNode) => ({
           id: m.id,
           title: m.title.romaji,
@@ -174,10 +253,11 @@ export const animeGetSchedule = tool('anime_get_schedule', {
     }
 
     // upcoming mode
-    ctx.log.info('Fetching upcoming episodes', { daysAhead: input.days_ahead });
+    const daysAhead = input.days_ahead ?? DEFAULT_DAYS_AHEAD;
+    ctx.log.info('Fetching upcoming episodes', { daysAhead });
 
     const upcoming = await anilist.getUpcomingEpisodes({
-      daysAhead: input.days_ahead,
+      daysAhead,
       page: input.page,
       perPage: input.per_page,
     });
@@ -187,8 +267,13 @@ export const animeGetSchedule = tool('anime_get_schedule', {
       .sort((a, b) => a.airingAt - b.airingAt);
 
     if (schedules.length === 0) {
+      const hidden = upcoming.airingSchedules.length;
       ctx.enrich.notice(
-        `No upcoming episodes found within ${input.days_ahead} day(s). Try increasing days_ahead (max 30).`,
+        hidden > 0
+          ? `All ${hidden} episode(s) on page ${input.page} are adult titles, hidden because include_adult is false.${upcoming.hasNextPage ? ` Continue with page ${input.page + 1}.` : ''}`
+          : input.page > 1
+            ? pastEndNotice(input.page, `the ${daysAhead}-day upcoming window`)
+            : `No upcoming episodes found within ${daysAhead} day(s). Try increasing days_ahead (max 30).`,
       );
     }
 
@@ -260,7 +345,17 @@ export const animeGetSchedule = tool('anime_get_schedule', {
       }
     }
 
-    if (result.has_next_page) {
+    // Upcoming pages are filtered for adult titles after the fetch, so their row count
+    // says nothing about the page size.
+    const nextReachable =
+      result.mode === 'season'
+        ? nextPageReachable({
+            page: result.page,
+            hasNextPage: result.has_next_page,
+            rowsOnPage: result.entries.length,
+          })
+        : result.has_next_page;
+    if (nextReachable) {
       lines.push('', `_More results available (page ${result.page + 1})._`);
     }
 
