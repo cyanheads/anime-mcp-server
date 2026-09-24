@@ -35,24 +35,28 @@ export const animeFindCharacters = tool('anime_find_characters', {
       .min(1)
       .optional()
       .describe(
-        'AniList media ID for title → cast lookup. Use anime_search_media to find this ID.',
+        'AniList media ID for title → cast lookup. Use anime_search_media to find this ID. Send exactly one of id, character_name, or voice_actor_name.',
       ),
     character_name: z
       .string()
       .max(200)
       .optional()
-      .describe("Character name to search for. Returns the character's appearances across media."),
+      .describe(
+        "Character name to search for. Returns the character's appearances across media. Trimmed; blank counts as absent. Send exactly one of id, character_name, or voice_actor_name.",
+      ),
     voice_actor_name: z
       .string()
       .max(200)
       .optional()
-      .describe('Voice actor/staff name to search for. Returns their roles across anime.'),
+      .describe(
+        'Voice actor/staff name to search for. Returns their roles across anime. Trimmed; blank counts as absent. Send exactly one of id, character_name, or voice_actor_name.',
+      ),
     language: z
       .enum(STAFF_LANGUAGE_VALUES)
       .optional()
       .describe(
         'Filter voice actors by language. Common: JAPANESE, ENGLISH, KOREAN. ' +
-          'Only applies when fetching by media ID.',
+          'Only with id (title → cast lookup); rejected with a name search.',
       ),
     page: z
       .number()
@@ -197,24 +201,52 @@ export const animeFindCharacters = tool('anime_find_characters', {
     {
       reason: 'missing_identifier',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'Neither id nor character_name nor voice_actor_name provided',
+      when: 'None of id, a non-blank character_name, or a non-blank voice_actor_name is provided',
       recovery:
         'Provide at least one of: id (media AniList ID), character_name, or voice_actor_name.',
+    },
+    {
+      reason: 'conflicting_inputs',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'More than one of id / character_name / voice_actor_name is provided, or language without id',
+      recovery:
+        'Send exactly one of id, character_name, or voice_actor_name per call, and send language only together with id.',
     },
   ],
 
   async handler(input, ctx) {
-    // Validate: must have at least one identifier
-    if (!input.id && !input.character_name && !input.voice_actor_name) {
+    const characterName = input.character_name?.trim() || undefined;
+    const voiceActorName = input.voice_actor_name?.trim() || undefined;
+    const identifiers = [
+      ...(input.id !== undefined ? ['id'] : []),
+      ...(characterName ? ['character_name'] : []),
+      ...(voiceActorName ? ['voice_actor_name'] : []),
+    ];
+
+    if (identifiers.length === 0) {
       throw ctx.fail(
         'missing_identifier',
         'Provide at least one of: id, character_name, or voice_actor_name',
         { ...ctx.recoveryFor('missing_identifier') },
       );
     }
+    if (identifiers.length > 1) {
+      throw ctx.fail(
+        'conflicting_inputs',
+        `Send one lookup identifier per call; got ${identifiers.join(', ')}`,
+        ctx.recoveryFor('conflicting_inputs'),
+      );
+    }
+    if (input.language && input.id === undefined) {
+      throw ctx.fail(
+        'conflicting_inputs',
+        'language filters the cast of a title, so it applies only with id, not with a name search',
+        ctx.recoveryFor('conflicting_inputs'),
+      );
+    }
 
     // Mode A: by media ID
-    if (input.id) {
+    if (input.id !== undefined) {
       ctx.log.info('Fetching characters by media ID', { id: input.id });
 
       const result = await anilist.getMediaCharacters({
@@ -263,17 +295,13 @@ export const animeFindCharacters = tool('anime_find_characters', {
     }
 
     // Mode B: by character name
-    if (input.character_name) {
-      ctx.log.info('Searching character by name', { name: input.character_name });
+    if (characterName) {
+      ctx.log.info('Searching character by name', { name: characterName });
 
-      const character = await anilist.searchCharacter(
-        input.character_name,
-        input.page,
-        input.per_page,
-      );
+      const character = await anilist.searchCharacter(characterName, input.page, input.per_page);
 
       if (!character) {
-        throw ctx.fail('not_found', `No character found matching "${input.character_name}"`, {
+        throw ctx.fail('not_found', `No character found matching "${characterName}"`, {
           ...ctx.recoveryFor('not_found'),
         });
       }
@@ -332,7 +360,7 @@ export const animeFindCharacters = tool('anime_find_characters', {
     }
 
     // Mode C: by voice actor name
-    const vaName = input.voice_actor_name;
+    const vaName = voiceActorName;
     if (!vaName) {
       throw ctx.fail(
         'missing_identifier',
@@ -346,11 +374,9 @@ export const animeFindCharacters = tool('anime_find_characters', {
     const staff = await anilist.searchStaff(vaName, input.page, input.per_page);
 
     if (!staff) {
-      throw ctx.fail(
-        'not_found',
-        `No voice actor/staff found matching "${input.voice_actor_name}"`,
-        { ...ctx.recoveryFor('not_found') },
-      );
+      throw ctx.fail('not_found', `No voice actor/staff found matching "${vaName}"`, {
+        ...ctx.recoveryFor('not_found'),
+      });
     }
 
     return {

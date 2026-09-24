@@ -287,8 +287,7 @@ describe('animeFindCharacters', () => {
     });
   });
 
-  it('id takes priority over character_name and voice_actor_name', async () => {
-    vi.mocked(anilist.getMediaCharacters).mockResolvedValue(mockCharacterEdges);
+  it('rejects id together with both names instead of letting id take priority', async () => {
     const ctx = createMockContext({ errors: animeFindCharacters.errors });
     const input = animeFindCharacters.input.parse({
       id: 11757,
@@ -296,9 +295,12 @@ describe('animeFindCharacters', () => {
       voice_actor_name: 'Miyano',
     });
 
-    const result = await animeFindCharacters.handler(input, ctx);
-
-    expect(result.mode).toBe('by_media');
+    await expect(animeFindCharacters.handler(input, ctx)).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+      message: expect.stringContaining('id, character_name, voice_actor_name'),
+      data: { reason: 'conflicting_inputs' },
+    });
+    expect(vi.mocked(anilist.getMediaCharacters)).not.toHaveBeenCalled();
     expect(vi.mocked(anilist.searchCharacter)).not.toHaveBeenCalled();
     expect(vi.mocked(anilist.searchStaff)).not.toHaveBeenCalled();
   });
@@ -519,5 +521,118 @@ describe('animeFindCharacters tool contract', () => {
         ]),
       );
     }
+  });
+});
+
+function contentText(result: { content: unknown[] }): string {
+  return result.content.map((block) => (block as { text?: string }).text ?? '').join('\n');
+}
+
+describe('animeFindCharacters input combinations', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  // ─── characterization: behavior that holds before and after ─────────────────
+
+  it.each(['', '   '])(
+    'an id beside the blank character_name %o still runs by_media',
+    async (name) => {
+      vi.mocked(anilist.getMediaCharacters).mockResolvedValue(mockCharacterEdges);
+
+      const result = await runToolContract(animeFindCharacters, {
+        id: 11757,
+        character_name: name,
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toMatchObject({ mode: 'by_media', media_id: 11757 });
+      expect(anilist.searchCharacter).not.toHaveBeenCalled();
+    },
+  );
+
+  it('forwards language with id', async () => {
+    vi.mocked(anilist.getMediaCharacters).mockResolvedValue(mockCharacterEdges);
+
+    await runToolContract(animeFindCharacters, { id: 11757, language: 'ENGLISH' });
+
+    expect(anilist.getMediaCharacters).toHaveBeenCalledWith(
+      expect.objectContaining({ mediaId: 11757, language: 'ENGLISH' }),
+    );
+  });
+
+  // ─── #25: one lookup mode per call ──────────────────────────────────────────
+
+  it.each([
+    [{ id: 5114, character_name: 'Edward Elric' }, 'id, character_name'],
+    [{ id: 5114, voice_actor_name: 'Romi Park' }, 'id, voice_actor_name'],
+    [
+      { character_name: 'Edward Elric', voice_actor_name: 'Romi Park' },
+      'character_name, voice_actor_name',
+    ],
+    [{ character_name: 'Edward Elric', language: 'JAPANESE' }, 'language'],
+    [{ voice_actor_name: 'Romi Park', language: 'ENGLISH' }, 'language'],
+  ] as const)('rejects %o with conflicting_inputs before any AniList call', async (raw, named) => {
+    const declared = animeFindCharacters.errors?.find((e) => e.reason === 'conflicting_inputs');
+
+    const result = await runToolContract(animeFindCharacters, raw);
+
+    expect(declared).toMatchObject({ code: JsonRpcErrorCode.ValidationError });
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: {
+        code: JsonRpcErrorCode.ValidationError,
+        message: expect.stringContaining(named),
+        data: { reason: 'conflicting_inputs', recovery: { hint: declared?.recovery } },
+      },
+    });
+    expect(contentText(result)).toContain(`Recovery: ${declared?.recovery}`);
+    expect(anilist.getMediaCharacters).not.toHaveBeenCalled();
+    expect(anilist.searchCharacter).not.toHaveBeenCalled();
+    expect(anilist.searchStaff).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { character_name: '   ' },
+    { voice_actor_name: ' \t ' },
+    { character_name: '', voice_actor_name: '  ' },
+  ])('a blank-only identifier %o fails missing_identifier with no AniList call', async (raw) => {
+    const result = await runToolContract(animeFindCharacters, raw);
+
+    expect(result.structuredContent).toMatchObject({
+      error: { data: { reason: 'missing_identifier' } },
+    });
+    expect(anilist.searchCharacter).not.toHaveBeenCalled();
+    expect(anilist.searchStaff).not.toHaveBeenCalled();
+  });
+
+  it('a blank name beside a real one is ignored', async () => {
+    vi.mocked(anilist.searchStaff).mockResolvedValue(mockStaffWithRoles);
+
+    const result = await runToolContract(animeFindCharacters, {
+      character_name: '  ',
+      voice_actor_name: 'Miyano',
+    });
+
+    expect(result.structuredContent).toMatchObject({ mode: 'by_voice_actor' });
+    expect(anilist.searchCharacter).not.toHaveBeenCalled();
+  });
+
+  it('trims a padded character_name before searching', async () => {
+    vi.mocked(anilist.searchCharacter).mockResolvedValue(mockCharacterWithMedia);
+
+    const result = await runToolContract(animeFindCharacters, { character_name: '  Okabe ' });
+
+    expect(result.isError).toBeFalsy();
+    expect(vi.mocked(anilist.searchCharacter).mock.calls[0]![0]).toBe('Okabe');
+  });
+
+  it('trims a padded voice_actor_name before searching', async () => {
+    vi.mocked(anilist.searchStaff).mockResolvedValue(mockStaffWithRoles);
+
+    const result = await runToolContract(animeFindCharacters, { voice_actor_name: '\tMiyano  ' });
+
+    expect(result.isError).toBeFalsy();
+    expect(vi.mocked(anilist.searchStaff).mock.calls[0]![0]).toBe('Miyano');
   });
 });
