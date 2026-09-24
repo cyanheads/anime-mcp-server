@@ -159,16 +159,22 @@ export interface MediaDetail extends MediaNode {
   trailer: { id: string; site: string } | null;
 }
 
+/**
+ * AniList page metadata limited to the fields AniList reports accurately.
+ * `total` and `lastPage` are placeholders upstream and are not selected; derive
+ * exact counts with `exactResultCount` from `./pagination.js`.
+ */
+export interface PageInfo {
+  currentPage: number;
+  hasNextPage: boolean;
+  /** Page size AniList applied — the requested size, capped upstream. */
+  perPage: number;
+}
+
 /** A page of media search results. */
 export interface MediaPage {
   media: MediaNode[];
-  pageInfo: {
-    total: number | null;
-    currentPage: number;
-    lastPage: number | null;
-    hasNextPage: boolean;
-    perPage: number | null;
-  };
+  pageInfo: PageInfo;
 }
 
 /** A character with optional voice actor edges. */
@@ -246,18 +252,23 @@ export interface AiringSchedule {
   timeUntilAiring: number;
 }
 
+/**
+ * One studio credit on a title. AniList returns a separate edge per credit, so a
+ * title the studio is credited on twice (main and co-credit) appears twice.
+ */
+export interface StudioMediaEdge {
+  isMainStudio: boolean;
+  node: MediaNode;
+}
+
 /** Studio full detail. */
 export interface StudioDetail {
   id: number;
   isAnimationStudio: boolean;
   media: {
-    pageInfo: {
-      total: number | null;
-      currentPage: number;
-      lastPage: number | null;
-      hasNextPage: boolean;
-    };
-    nodes: MediaNode[];
+    /** AniList caps the page at 25 credits and echoes the size it applied. */
+    pageInfo: PageInfo;
+    edges: StudioMediaEdge[];
   };
   name: string;
   siteUrl: string | null;

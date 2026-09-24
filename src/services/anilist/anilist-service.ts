@@ -13,6 +13,7 @@ import {
   withRetry,
 } from '@cyanheads/mcp-ts-core/utils';
 import { normalizeAniListDescription } from './normalize-description.js';
+import { toPageDepthError } from './pagination.js';
 import type {
   AiringSchedule,
   CharacterEdge,
@@ -51,7 +52,12 @@ export function shutdownAniList(): void {
 
 // ─── Core query executor ──────────────────────────────────────────────────────
 
-/** Execute a GraphQL query against AniList. Returns the `data` payload. */
+/**
+ * Execute a GraphQL query against AniList. Returns the `data` payload.
+ * AniList's page-depth refusal (HTTP 400) surfaces as a typed, non-retried
+ * `page_depth_exceeded` ValidationError; every other HTTP failure keeps the
+ * `fetchWithTimeout` classification.
+ */
 function query<T>(gql: string, variables: Record<string, unknown>): Promise<T> {
   return withRetry(
     ({ signal }) =>
@@ -62,6 +68,8 @@ function query<T>(gql: string, variables: Record<string, unknown>): Promise<T> {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
             body: JSON.stringify({ query: gql, variables }),
+          }).catch((error: unknown) => {
+            throw toPageDepthError(error) ?? error;
           });
 
           const json = (await resp.json()) as {
@@ -121,7 +129,12 @@ const MEDIA_DETAIL_FRAGMENT = `
 
 // ─── Service methods ──────────────────────────────────────────────────────────
 
-/** Search anime or manga by various filters. Returns a page of results. */
+/**
+ * Search anime or manga by various filters. Returns a page of results.
+ * Filters are sent as given — callers pass normalized values and omit absent ones.
+ * An omitted `sort` defaults to `SEARCH_MATCH` with a `query` and `POPULARITY_DESC`
+ * without one, since `SEARCH_MATCH` only ranks when there is a search term.
+ */
 export async function searchMedia(params: {
   mediaType: MediaType;
   query?: string | undefined;
@@ -144,7 +157,7 @@ export async function searchMedia(params: {
       $isAdult: Boolean
     ) {
       Page(page: $page, perPage: $perPage) {
-        pageInfo { total currentPage lastPage hasNextPage perPage }
+        pageInfo { currentPage hasNextPage perPage }
         media(
           type: $type, search: $search, genre: $genre, tag: $tag,
           season: $season, seasonYear: $seasonYear, format: $format,
@@ -156,14 +169,14 @@ export async function searchMedia(params: {
 
   const data = await query<{ Page: MediaPage }>(gql, {
     type: params.mediaType,
-    search: params.query || undefined,
-    genre: params.genre || undefined,
-    tag: params.tag || undefined,
-    season: params.season || undefined,
-    seasonYear: params.seasonYear || undefined,
-    format: params.format || undefined,
-    status: params.status || undefined,
-    sort: params.sort || ['SEARCH_MATCH'],
+    search: params.query,
+    genre: params.genre,
+    tag: params.tag,
+    season: params.season,
+    seasonYear: params.seasonYear,
+    format: params.format,
+    status: params.status,
+    sort: params.sort ?? (params.query ? ['SEARCH_MATCH'] : ['POPULARITY_DESC']),
     page: params.page ?? 1,
     perPage: Math.min(params.perPage ?? 20, 50),
     isAdult: params.includeAdult ? undefined : false,
@@ -232,7 +245,7 @@ export async function getSeasonSchedule(params: {
       $season: MediaSeason!, $seasonYear: Int!, $page: Int, $perPage: Int, $isAdult: Boolean
     ) {
       Page(page: $page, perPage: $perPage) {
-        pageInfo { total currentPage lastPage hasNextPage perPage }
+        pageInfo { currentPage hasNextPage perPage }
         media(
           type: ANIME, season: $season, seasonYear: $seasonYear,
           sort: [POPULARITY_DESC], isAdult: $isAdult
@@ -443,23 +456,31 @@ export async function searchStaff(
   }
 }
 
-/** Resolve distinct MyAnimeList IDs to AniList media in one batched query. */
+/**
+ * Resolve distinct MyAnimeList IDs to AniList media in one batched query.
+ * Without `includeAdult`, adult media are excluded, so their MAL IDs stay unresolved.
+ */
 export async function getMediaByMalIds(
   malIds: number[],
   mediaType: MediaType,
+  includeAdult: boolean,
 ): Promise<Map<number, MediaNode>> {
   const idMalIn = [...new Set(malIds)].filter((id) => id > 0);
   if (idMalIn.length === 0) return new Map();
 
   const gql = `
-    query GetMediaByMalIds($idMalIn: [Int], $type: MediaType) {
+    query GetMediaByMalIds($idMalIn: [Int], $type: MediaType, $isAdult: Boolean) {
       Page(page: 1, perPage: 50) {
-        media(idMal_in: $idMalIn, type: $type) { ${MEDIA_NODE_FRAGMENT} }
+        media(idMal_in: $idMalIn, type: $type, isAdult: $isAdult) { ${MEDIA_NODE_FRAGMENT} }
       }
     }
   `;
 
-  const data = await query<{ Page: { media: MediaNode[] } }>(gql, { idMalIn, type: mediaType });
+  const data = await query<{ Page: { media: MediaNode[] } }>(gql, {
+    idMalIn,
+    type: mediaType,
+    isAdult: includeAdult ? undefined : false,
+  });
   const mediaByMalId = new Map<number, MediaNode>();
   for (const media of data.Page.media) {
     if (media.idMal !== null) mediaByMalId.set(media.idMal, media);
@@ -522,6 +543,8 @@ export async function getRankings(params: {
   mode: 'top' | 'trending' | 'seasonal';
   format?: MediaFormat | undefined;
   genre?: string | undefined;
+  /** AniList tag name; sent only when non-empty. */
+  tag?: string | undefined;
   season?: MediaSeason | undefined;
   seasonYear?: number | undefined;
   page?: number | undefined;
@@ -557,12 +580,13 @@ export async function getRankings(params: {
   const gql = `
     query GetRankings(
       $type: MediaType!, $sort: [MediaSort]!, $format: MediaFormat, $genre: String,
-      $season: MediaSeason, $seasonYear: Int, $page: Int, $perPage: Int, $isAdult: Boolean
+      $tag: String, $season: MediaSeason, $seasonYear: Int, $page: Int, $perPage: Int,
+      $isAdult: Boolean
     ) {
       Page(page: $page, perPage: $perPage) {
-        pageInfo { total currentPage lastPage hasNextPage perPage }
+        pageInfo { currentPage hasNextPage perPage }
         media(
-          type: $type, sort: $sort, format: $format, genre: $genre,
+          type: $type, sort: $sort, format: $format, genre: $genre, tag: $tag,
           season: $season, seasonYear: $seasonYear, isAdult: $isAdult
         ) { ${MEDIA_NODE_FRAGMENT} }
       }
@@ -574,6 +598,7 @@ export async function getRankings(params: {
     sort,
     format: params.format || undefined,
     genre: params.genre || undefined,
+    tag: params.tag || undefined,
     season: season || undefined,
     seasonYear: seasonYear || undefined,
     page: params.page ?? 1,
@@ -583,6 +608,20 @@ export async function getRankings(params: {
 
   return data.Page;
 }
+
+/** AniList serves at most this many credits per page of a studio's `media`. */
+const STUDIO_MEDIA_PAGE_MAX = 25;
+
+/**
+ * A studio's filmography page: one edge per credit, carrying `isMainStudio`.
+ * AniList echoes the applied page size in `pageInfo.perPage`.
+ */
+const STUDIO_MEDIA_SELECTION = `
+  media(page: $page, perPage: $perPage, sort: $mediaSort) {
+    pageInfo { currentPage hasNextPage perPage }
+    edges { isMainStudio node { ${MEDIA_NODE_FRAGMENT} } }
+  }
+`;
 
 /** Look up a studio by name (search) and return its filmography. */
 export async function searchStudio(params: {
@@ -595,10 +634,7 @@ export async function searchStudio(params: {
     query SearchStudio($search: String!, $mediaSort: [MediaSort], $page: Int, $perPage: Int) {
       Studio(search: $search) {
         id name isAnimationStudio siteUrl
-        media(page: $page, perPage: $perPage, sort: $mediaSort) {
-          pageInfo { total currentPage lastPage hasNextPage }
-          nodes { ${MEDIA_NODE_FRAGMENT} }
-        }
+        ${STUDIO_MEDIA_SELECTION}
       }
     }
   `;
@@ -608,7 +644,7 @@ export async function searchStudio(params: {
       search: params.name,
       mediaSort: params.sort ? [params.sort] : ['POPULARITY_DESC'],
       page: params.page ?? 1,
-      perPage: Math.min(params.perPage ?? 25, 50),
+      perPage: Math.min(params.perPage ?? STUDIO_MEDIA_PAGE_MAX, STUDIO_MEDIA_PAGE_MAX),
     });
     return data.Studio;
   } catch (err) {
@@ -628,10 +664,7 @@ export async function getStudioById(params: {
     query GetStudio($id: Int!, $mediaSort: [MediaSort], $page: Int, $perPage: Int) {
       Studio(id: $id) {
         id name isAnimationStudio siteUrl
-        media(page: $page, perPage: $perPage, sort: $mediaSort) {
-          pageInfo { total currentPage lastPage hasNextPage }
-          nodes { ${MEDIA_NODE_FRAGMENT} }
-        }
+        ${STUDIO_MEDIA_SELECTION}
       }
     }
   `;
@@ -641,7 +674,7 @@ export async function getStudioById(params: {
       id: params.id,
       mediaSort: params.sort ? [params.sort] : ['POPULARITY_DESC'],
       page: params.page ?? 1,
-      perPage: Math.min(params.perPage ?? 25, 50),
+      perPage: Math.min(params.perPage ?? STUDIO_MEDIA_PAGE_MAX, STUDIO_MEDIA_PAGE_MAX),
     });
     return data.Studio;
   } catch (err) {

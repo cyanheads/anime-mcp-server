@@ -91,18 +91,23 @@ export async function getMediaFull(
   return result?.data ?? null;
 }
 
-/** Search anime or manga by query. */
+/** Most rows Jikan returns per search page; larger `limit` values are capped. */
+export const JIKAN_SEARCH_PAGE_MAX = 25;
+
+/** Search anime or manga by query. `sfw` asks Jikan to drop adult entries. */
 export async function searchMedia(params: {
   query: string;
   mediaType: 'ANIME' | 'MANGA';
   page?: number;
   limit?: number;
+  sfw?: boolean;
 }): Promise<{ results: JikanSearchResult[]; pagination: JikanPagination | null }> {
   const noun = params.mediaType === 'ANIME' ? 'anime' : 'manga';
   const result = await get<{ data: JikanSearchResult[]; pagination: JikanPagination }>(`/${noun}`, {
     q: params.query,
     page: params.page ?? 1,
-    limit: Math.min(params.limit ?? 20, 25),
+    limit: Math.min(params.limit ?? 20, JIKAN_SEARCH_PAGE_MAX),
+    sfw: params.sfw ? 'true' : undefined,
   });
 
   return {
