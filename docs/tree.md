@@ -1,6 +1,6 @@
 # anime-mcp-server - Directory Structure
 
-Generated on: 2026-09-19 18:41:22
+Generated on: 2026-09-24 17:13:24
 
 ```text
 anime-mcp-server/
@@ -25,6 +25,7 @@ anime-mcp-server/
 │   └── settings.json
 ├── changelog/
 │   ├── 0.1.x/
+│   ├── 0.2.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md
@@ -157,6 +158,7 @@ anime-mcp-server/
 │   │   │   ├── anilist-service.ts
 │   │   │   ├── normalize-description.test.ts
 │   │   │   ├── normalize-description.ts
+│   │   │   ├── pagination.ts
 │   │   │   └── types.ts
 │   │   ├── jikan/
 │   │   │   ├── jikan-service.ts
@@ -171,7 +173,8 @@ anime-mcp-server/
 │   │   └── anime-media.resource.test.ts
 │   ├── services/
 │   │   ├── anilist/
-│   │   │   └── anilist-service.test.ts
+│   │   │   ├── anilist-service.test.ts
+│   │   │   └── pagination.test.ts
 │   │   ├── jikan-service.test.ts
 │   │   └── pacing.test.ts
 │   ├── tools/
@@ -182,6 +185,7 @@ anime-mcp-server/
 │   │   ├── anime-get-relations.tool.test.ts
 │   │   ├── anime-get-schedule.tool.test.ts
 │   │   ├── anime-get-studio.tool.test.ts
+│   │   ├── anime-search-media.contract.test.ts
 │   │   └── anime-search-media.tool.test.ts
 │   ├── description-contract.test.ts
 │   └── session-mode.test.ts

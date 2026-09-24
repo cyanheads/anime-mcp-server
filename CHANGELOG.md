@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.0](changelog/0.2.x/0.2.0.md) — 2026-09-24 · ⚠️ Breaking
+
+Rejects empty and contradictory tool inputs, reports only exact result counts, types AniList's page-depth refusal, and narrows the MyAnimeList search fallback to title-only queries AniList has no match for.
+
 ## [0.1.8](changelog/0.1.x/0.1.8.md) — 2026-09-19 · 🛡️ Security
 
 Defaults HTTP to stateless sessions, paces AniList and Jikan requests, and decodes nested entity references once.
