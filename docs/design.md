@@ -6,25 +6,35 @@
 
 | Name | Description | Key Inputs | Annotations |
 |:-----|:------------|:-----------|:------------|
-| `anime_search_media` | Search anime or manga by title, genre, tag, season, year, format, or status. Returns ranked results with IDs, titles, scores, format, and episode/chapter counts. AniList primary; Jikan fallback on empty. | `media_type` (`ANIME`\|`MANGA`), `query`, `genre`, `tag`, `season` (`WINTER`\|`SPRING`\|`SUMMER`\|`FALL`), `season_year`, `format` (AniList MediaFormat enum), `status` (AniList MediaStatus enum), `sort`, `page`, `per_page`, `include_adult` | `readOnlyHint: true`, `openWorldHint: true` |
+| `anime_search_media` | Search anime or manga by title, genre, tag, season, year, format, or status; at least one criterion (or a sort other than `SEARCH_MATCH`) is required. Returns ranked results with IDs, titles, scores, format, and episode/chapter counts, and an exact result count only on the final page. AniList primary; optional Jikan fallback when AniList has no match for a title-only query. | `media_type` (`ANIME`\|`MANGA`), `query`, `genre`, `tag`, `season` (`WINTER`\|`SPRING`\|`SUMMER`\|`FALL`), `season_year`, `format` (AniList MediaFormat enum), `status` (AniList MediaStatus enum), `sort`, `page`, `per_page`, `include_adult` | `readOnlyHint: true`, `openWorldHint: true` |
 | `anime_get_media` | Full detail for one anime or manga by AniList ID. Returns synopsis, format, episode/chapter count, status, season, studios, source material, genres + tags (spoiler-flagged), AniList and MAL scores side by side, streaming links, cover/banner, and direct relations. Primary source for a title's complete profile. | `id`, `include_adult` | `readOnlyHint: true`, `idempotentHint: true` |
 | `anime_get_relations` | Franchise untangler. Walks the related-works graph from a media ID beyond one hop — sequels, prequels, side stories, movies, OVAs, source/adaptation — and returns them ordered into a suggested watch/read order. The "how do I watch this whole series" tool. | `id`, `max_depth` (int, 1–4) | `readOnlyHint: true`, `idempotentHint: true` |
-| `anime_get_schedule` | Airing schedule for a season or upcoming episode window. `season` mode: all anime airing in a given season/year. `upcoming` mode: next episode for each airing title within a date window, with UTC timestamp and countdown. | `mode` (`season`\|`upcoming`), `season` (`WINTER`\|`SPRING`\|`SUMMER`\|`FALL`), `season_year`, `days_ahead`, `page`, `per_page` | `readOnlyHint: true`, `openWorldHint: true` |
-| `anime_find_characters` | Characters and voice actors for a title, or look up a character/VA by name. Returns characters with their role (main/supporting/background), voice actors by language, and cross-links to other media. | `id` (media ID, or omit for name search), `character_name`, `voice_actor_name`, `language` (AniList StaffLanguage enum: `JAPANESE`\|`ENGLISH`\|`KOREAN`\|etc.), `page`, `per_page` | `readOnlyHint: true`, `openWorldHint: true` |
+| `anime_get_schedule` | Airing schedule for a season or upcoming episode window. `season` mode: all anime airing in a given season/year, with an exact count only on the final page. `upcoming` mode: next episode for each airing title within a date window, with UTC timestamp and countdown. Each mode rejects the other mode's fields. | `mode` (`season`\|`upcoming`), `season` (`WINTER`\|`SPRING`\|`SUMMER`\|`FALL`) and `season_year` (season mode), `days_ahead` (upcoming mode, 1–30, 7 when omitted), `page`, `per_page` (max 50), `include_adult` | `readOnlyHint: true`, `openWorldHint: true` |
+| `anime_find_characters` | Characters and voice actors for a title, or look up a character/VA by name. Returns characters with their role (main/supporting/background), voice actors by language, and cross-links to other media. Exactly one identifier per call. | exactly one of `id` (media ID), `character_name`, `voice_actor_name`; `language` (AniList StaffLanguage enum: `JAPANESE`\|`ENGLISH`\|`KOREAN`\|etc., with `id` only), `page`, `per_page` | `readOnlyHint: true`, `openWorldHint: true` |
 | `anime_get_recommendations` | Recommendations for a title, merged from AniList and Jikan, with scores and vote counts. Optionally accepts what the user liked about the source title to contextualize picks. | `id`, `liked_aspects`, `page`, `per_page` | `readOnlyHint: true`, `idempotentHint: true` |
-| `anime_get_rankings` | Top, trending, or seasonal rankings. Filterable by genre, tag, and format. `top` returns all-time by score; `trending` returns current week; `seasonal` returns the current or specified season sorted by popularity. | `mode` (`top`\|`trending`\|`seasonal`), `media_type` (`ANIME`\|`MANGA`), `format` (AniList MediaFormat enum), `genre`, `season` (`WINTER`\|`SPRING`\|`SUMMER`\|`FALL`), `season_year`, `page`, `per_page` | `readOnlyHint: true`, `openWorldHint: true` |
-| `anime_get_studio` | A studio's full filmography by name or AniList studio ID. Returns all titles the studio produced, sortable by year or score, with format, status, and episode count. | `name`, `id`, `sort` (`POPULARITY_DESC`\|`SCORE_DESC`\|`START_DATE_DESC`\|`START_DATE`), `page`, `per_page` | `readOnlyHint: true`, `idempotentHint: true` (when `id` provided) |
+| `anime_get_rankings` | Top, trending, or seasonal rankings. Filterable by genre, tag, and format. `top` returns all-time by score; `trending` returns current week; `seasonal` returns the current or specified season sorted by popularity. | `mode` (`top`\|`trending`\|`seasonal`), `media_type` (`ANIME`\|`MANGA`), `format` (AniList MediaFormat enum), `genre`, `tag`, `season` (`WINTER`\|`SPRING`\|`SUMMER`\|`FALL`) and `season_year` (together or neither in `seasonal`; filters in `top`/`trending`), `page`, `per_page` (max 50), `include_adult` | `readOnlyHint: true`, `openWorldHint: true` |
+| `anime_get_studio` | A studio's full filmography by name or AniList studio ID. Returns one row per distinct title on a page (with a main-studio flag), sortable by year or score, with format, status, and episode count. | exactly one of `name`, `id`; `sort` (`POPULARITY_DESC`\|`SCORE_DESC`\|`START_DATE_DESC`\|`START_DATE`), `page`, `per_page` (max 25) | `readOnlyHint: true`, `idempotentHint: true` (when `id` provided) |
 
 #### Error Contracts
 
 | Tool | reason | code | when |
 |:-----|:-------|:-----|:-----|
+| `anime_search_media` | `missing_criteria` | `ValidationError` | No criterion remains after blank `query`/`genre`/`tag` values are dropped (a `sort` other than `SEARCH_MATCH` counts); fails before any upstream call |
+| `anime_search_media` | `page_depth_exceeded` | `ValidationError` | `page × per_page` reaches past AniList's first 5,000 entries; thrown by `AniListService` for any `Page` query |
 | `anime_get_media` | `not_found` | `NotFound` | AniList returns null for the given ID (invalid or nonexistent) |
 | `anime_get_relations` | `not_found` | `NotFound` | Root media ID not found on AniList |
 | `anime_find_characters` | `not_found` | `NotFound` | Name search (`character_name` / `voice_actor_name`) returns no match from AniList |
-| `anime_find_characters` | `missing_identifier` | `InvalidParams` | Neither `id` nor `character_name` nor `voice_actor_name` provided |
+| `anime_find_characters` | `media_not_found` | `NotFound` | AniList has no media record for the requested `id` |
+| `anime_find_characters` | `missing_identifier` | `ValidationError` | None of `id`, a non-blank `character_name`, or a non-blank `voice_actor_name` provided |
+| `anime_find_characters` | `conflicting_inputs` | `ValidationError` | More than one of `id` / `character_name` / `voice_actor_name`, or `language` without `id`; fails before any AniList call |
+| `anime_get_studio` | `missing_identifier` | `ValidationError` | Neither `id` nor a non-blank `name` provided |
+| `anime_get_studio` | `conflicting_inputs` | `ValidationError` | Both `id` and a non-blank `name` provided; fails before any AniList call |
 | `anime_get_studio` | `not_found` | `NotFound` | Neither name search nor ID lookup returns a result on AniList |
-| `anime_get_schedule` | `invalid_season` | `InvalidParams` | `mode: season` called without both `season` and `season_year` |
+| `anime_get_schedule` | `invalid_season` | `ValidationError` | `mode: season` called without both `season` and `season_year` |
+| `anime_get_schedule` | `conflicting_inputs` | `ValidationError` | `mode: upcoming` with `season` or `season_year`, or `mode: season` with `days_ahead`; fails before any AniList call |
+| `anime_get_schedule` | `page_depth_exceeded` | `ValidationError` | `page × per_page` reaches past AniList's first 5,000 entries; thrown by `AniListService` |
+| `anime_get_rankings` | `invalid_season` | `ValidationError` | `mode: seasonal` with exactly one of `season` / `season_year`; fails before any AniList call |
+| `anime_get_rankings` | `page_depth_exceeded` | `ValidationError` | `page × per_page` reaches past AniList's first 5,000 entries; thrown by `AniListService` |
 
 Baseline infra codes (`ServiceUnavailable`, `Timeout`, `ValidationError`, `InternalError`) bubble from any tool without needing declaration.
 
@@ -58,7 +68,7 @@ Multi-source anime and manga server for fans who care about the details. The wor
 - Seasonal airing schedule and upcoming episode countdown
 - Characters + voice actors, bidirectionally (title → cast, VA → roles)
 - Recommendations merged from AniList and Jikan
-- Top/trending/seasonal rankings filterable by genre and format
+- Top/trending/seasonal rankings filterable by genre, tag, and format
 - Studio filmography by name or ID
 - Adult content gated behind explicit `include_adult` opt-in (default: off)
 - Spoiler-safe by default — AniList spoiler-flagged tags returned with spoiler flag, relation descriptions sanitized unless opted in
@@ -72,7 +82,7 @@ Multi-source anime and manga server for fans who care about the details. The wor
 | Service | Wraps | Used By |
 |:--------|:------|:--------|
 | `AniListService` | AniList GraphQL API — `https://graphql.anilist.co` (POST, keyless) | `anime_search_media`, `anime_get_media`, `anime_get_relations`, `anime_get_schedule`, `anime_find_characters`, `anime_get_recommendations`, `anime_get_rankings`, `anime_get_studio`, `anime://media/{id}` |
-| `JikanService` | Jikan v4 REST API — `https://api.jikan.moe/v4` (GET, keyless, ~3 req/sec). **Endpoint routing is media-type-aware:** anime uses `/anime/{id}/full`, `/anime/{id}/recommendations`, `GET /anime?q=...`; manga uses `/manga/{id}/full`, `/manga/{id}/recommendations`, `GET /manga?q=...`. Service must branch on `media_type` for all ID and search calls. | `anime_search_media` (fallback), `anime_get_media` (MAL score supplement), `anime_get_recommendations` (merged) |
+| `JikanService` | Jikan v4 REST API — `https://api.jikan.moe/v4` (GET, keyless, ~3 req/sec). **Endpoint routing is media-type-aware:** anime uses `/anime/{id}/full`, `/anime/{id}/recommendations`, `GET /anime?q=...`; manga uses `/manga/{id}/full`, `/manga/{id}/recommendations`, `GET /manga?q=...`. Service must branch on `media_type` for all ID and search calls. | `anime_search_media` (optional fallback for a title-only query with no AniList match; a failure leaves the AniList empty page with a notice), `anime_get_media` (MAL score supplement), `anime_get_recommendations` (merged) |
 | `KitsuService` | Kitsu JSON:API — `https://kitsu.io/api/edge` (GET, keyless). **Endpoint routing is media-type-aware:** anime uses `/anime/{id}` and `/anime?filter[text]=...`; manga uses `/manga/{id}` and `/manga?filter[text]=...`. Streaming links are relevant only for anime — skip Kitsu call when `media_type: MANGA`. | `anime_get_media` (streaming links supplement, anime only) |
 
 **Source strategy:** AniList is primary for structure, relations, characters, schedule, and studio data — its GraphQL collapses what would be many REST calls into one. Jikan contributes MAL scores and recommendation depth. Kitsu contributes streaming links where AniList's `externalLinks` (type: STREAMING) is incomplete. ID reconciliation via AniList's `idMal` field bridges AniList IDs ↔ MAL IDs.
@@ -92,14 +102,14 @@ No `server-config.ts` needed — zero required env vars. Rate limit handling is 
 ## Implementation Order
 
 1. **Services** — `AniListService` (GraphQL client with retry + rate-limit backoff), `JikanService` (REST client, ~300ms between calls), `KitsuService` (JSON:API client)
-2. **`anime_search_media`** — AniList Page query + Jikan fallback; establish the base search + output shape
+2. **`anime_search_media`** — AniList Page query + optional Jikan fallback (title-only queries with no AniList match, settled with `Promise.allSettled`); establish the base search + output shape
 3. **`anime_get_media`** — flagship: AniList full-detail query + Jikan score supplement + Kitsu streaming links fan-out
 4. **`anime_get_relations`** — multi-hop BFS/DFS over AniList relation graph; watch-order sort
 5. **`anime_get_schedule`** — AniList `AiringSchedule` query (single-item) + `Page(media(...))` for season mode
 6. **`anime_find_characters`** — AniList `Media.characters` + `Staff` lookup
 7. **`anime_get_recommendations`** — AniList `Media.recommendations.nodes` + Jikan `/{media_type}/{idMal}/recommendations` merge
 8. **`anime_get_rankings`** — AniList `Page(media(sort:...))` with mode dispatch
-9. **`anime_get_studio`** — AniList `Studio(...)` query with `media` node list
+9. **`anime_get_studio`** — AniList `Studio(...)` query with `media` edges (`isMainStudio` + node), deduplicated per page
 10. **`anime://media/{id}` resource** — delegates to `anime_get_media` handler
 11. Tests for each tool + service
 12. Devcheck pass
@@ -228,6 +238,18 @@ Both calls parallel via `Promise.allSettled`. Items deduped by ID; AniList ratin
 **Kitsu ID resolution via mappings endpoint, not search.** When AniList's `idMal` is available, use Kitsu's `/mappings?filter[externalSite]=myanimelist/anime&filter[externalId]={idMal}` to resolve the Kitsu ID directly, avoiding a text search that might match the wrong title. Confirmed live: Kitsu 7442 maps to MAL 16498 via `externalSite: "myanimelist/anime"`.
 
 **AniList recommendations field is `nodes`, not `edges`.** Live probe confirmed: `Media.recommendations(page, perPage) { nodes { rating, mediaRecommendation {...} } }` — querying `edges.rating` returns HTTP 200 with a 400 error body. Service must use `nodes`.
+
+**Only exact counts, derived from `hasNextPage`.** AniList documents `pageInfo.total` and `lastPage` as inaccurate: `total` reads 5000 (the page-depth ceiling) on any `Page` query until the final page, and a page past the end reports (page − 1) × perPage. The service selects neither. `exactResultCount` in `services/anilist/pagination.ts` derives a count only where the page proves it — 0 for an empty first page, (page − 1) × the echoed `perPage` + entries on a non-empty final page — and every other page reports `null`, so no placeholder is ever presented as a total. A final page that is exactly full still reports `hasNextPage: true` (measured: 7 matches at 7 per page), so it counts as `null`, and the empty page after it is where a caller paging forward stops; `pastEndNotice` words every empty later page as the end of a complete list rather than a bad request.
+
+**Page-depth refusal is a typed error.** AniList answers HTTP 400 `Page depth exceeds maximum allowed for API requests (5000 entries)` whenever `page × perPage` exceeds 5,000 (measured: page 100 at 50 per page is served, page 101 is refused, and page 103 at 49 per page is refused although it starts at entry 4,999). The AniList service's query choke point maps that body to a `page_depth_exceeded` `ValidationError` carrying its recovery hint, so every `Page`-backed tool gets the same reason; other 400s keep `InvalidParams`. AniList still reports `hasNextPage: true` on the last page it serves, so `nextPageOutOfReach` (`(page + 1) × perPage > 5,000` with `hasNextPage`) marks that page and tools attach `PAGE_DEPTH_EDGE_NOTICE`, sparing the caller a refused request. A tool's `format()` sees only its output, so `nextPageReachable` reads the page size from the row count of a page with `has_next_page` (AniList serves full pages until the last) to drop the next-page hint on that edge page. The refusal keys on the requested window, not the list size: page 201 at 25 per page of a 117-title season is refused too.
+
+**Contradictory inputs are rejected, not resolved by precedence.** The multi-mode tools (`anime_find_characters`, `anime_get_studio`, `anime_get_schedule`, `anime_get_rankings`) keep flat, all-optional input schemas and enforce combinations in the handler as declared `conflicting_inputs` / `invalid_season` `ValidationError`s, before any AniList call. Precedence silently dropped declared fields; a `z.discriminatedUnion` root would have forced a new required discriminator on the two tools that pick a mode by which identifier is present. Checks key on caller-supplied values, so a field the check reads carries no schema default (`days_ahead` defaults to 7 in the handler), and blank names count as absent.
+
+**Studio filmography rows are distinct titles, counted only when page 1 holds everything.** AniList returns one `media` edge per studio credit, so a title with a main and a co-credit arrives twice; rows are deduplicated per page and marked `is_main_studio` when any edge is. AniList also caps the nested connection at 25 per page (a larger `perPage` is silently served as 25), so `per_page` is capped at 25 to keep page arithmetic aligned. Because pages count credits and one title's credits can straddle a page boundary, `total_titles` is exact only for a filmography that fits on page 1.
+
+**Search requires a criterion; blank filters are absent.** A search with no filter sends an unfiltered AniList query ordered by ID, which answers nothing the caller asked. Blank or whitespace `query`/`genre`/`tag` values (form clients send `""`) are trimmed away first, and a sort other than `SEARCH_MATCH` counts as a criterion so sort-only browsing still works. An omitted sort is `SEARCH_MATCH` with a query and `POPULARITY_DESC` without one, because `SEARCH_MATCH` without a search term falls back to ID order.
+
+**The search fallback forwards only the query, so it runs only for a query-only search.** Jikan ignores AniList filters, so a filtered search never falls back. On a page past the first, a one-row page-1 check decides whether AniList has any match (the empty page alone cannot, and `total` is unreliable); that extra request is made only on an empty later page of a query-only search. The fallback honors `include_adult` on both legs (`sfw=true` to Jikan, `isAdult: false` on the MAL-ID lookup), and it is skipped with a notice when `per_page` exceeds 25, because Jikan caps its page at 25 rows and its page N would no longer line up with the caller's page arithmetic.
 
 **Jikan 500 on invalid ID is an upstream proxy issue, not a server error.** When MAL returns an unexpected status for a nonexistent ID, Jikan raises a 500 UpstreamException. Service must treat HTTP 5xx on both `/anime/{id}` and `/manga/{id}` lookups as "not found or MAL unavailable" and fail gracefully (null MAL data), not surface as `ServiceUnavailable`.
 

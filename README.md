@@ -29,13 +29,13 @@ Anime and manga data from AniList, Jikan (MyAnimeList), and Kitsu. Search titles
 
 | Tool | Description |
 |:---|:---|
-| `anime_search_media` | Search anime or manga by title, genre, tag, season, year, format, or status. Returns ranked results with IDs, titles, scores, format, and episode/chapter counts. AniList primary; Jikan fallback on empty results. |
+| `anime_search_media` | Search anime or manga by title, genre, tag, season, year, format, or status. Returns ranked results with IDs, titles, scores, format, and episode/chapter counts. AniList primary; Jikan (MAL) fallback when AniList has no match for a title-only query. |
 | `anime_get_media` | Full detail for one anime or manga by AniList ID — synopsis, format, episode/chapter count, status, season, studios, source material, genres and tags (spoiler-flagged), AniList and MAL scores side by side, streaming links, cover/banner, and direct relations. |
 | `anime_get_relations` | Franchise untangler. Walks the related-works graph from a media ID beyond one hop — sequels, prequels, side stories, movies, OVAs, source and adaptation — and returns them in suggested watch/read order. |
 | `anime_get_schedule` | Airing schedule for a season or upcoming episode window. Season mode lists all anime airing in a given season/year. Upcoming mode returns the next episode for each airing title within a date window, with UTC timestamp and countdown. |
 | `anime_find_characters` | Characters and voice actors for a title, or look up a character/VA by name. Returns characters with role (main/supporting/background), voice actors by language, and cross-links to other media. |
 | `anime_get_recommendations` | AniList recommendations with matching Jikan (MAL) vote counts. Optionally echoes what the user liked about the source title to contextualize picks. |
-| `anime_get_rankings` | Top, trending, or seasonal rankings. Filterable by genre and format. Top returns all-time by score; trending uses AniList's trending order; seasonal returns the current or specified season sorted by popularity. |
+| `anime_get_rankings` | Top, trending, or seasonal rankings. Filterable by genre, tag, and format. Top returns all-time by score; trending uses AniList's trending order; seasonal returns the current or specified season sorted by popularity. |
 | `anime_get_studio` | A studio's full filmography by name or AniList studio ID — all titles the studio produced, sortable by year or score, with format, status, and episode count. |
 
 ### Resources
@@ -52,10 +52,12 @@ All resource data is also reachable via tools. Use `anime_search_media` to disco
 
 ### `anime_search_media` <sub>tool</sub>
 
-- Free-text title search with AniList primary; falls back to Jikan when AniList returns empty and a `query` was given
+- Free-text title search with AniList primary. When AniList has no match at all for a query-only search, it falls back to Jikan (MAL) and maps the rows to AniList IDs, honoring `include_adult`. The fallback runs only at `per_page` 25 or less (Jikan's page size); above that, or if Jikan is unavailable, the AniList empty page comes back with a notice instead of an error
 - Filter by genre, tag, season/year, format (`TV`, `MOVIE`, `OVA`, `MANGA`, `NOVEL`, etc.), and status (`RELEASING`, `FINISHED`, etc.); up to 5 sort values
+- Needs at least one criterion; blank or whitespace `query`/`genre`/`tag` values count as absent, and a sort other than `SEARCH_MATCH` alone browses the catalog (`missing_criteria` otherwise)
+- Default sort: `SEARCH_MATCH` with a `query`, `POPULARITY_DESC` without one
 - Adult content gated behind explicit `include_adult: true` (default off)
-- Pagination via `page` and `per_page` (max 50)
+- Pagination via `page` and `per_page` (max 50), driven by `has_next_page`; `total_results` is exact and appears only on the final page. AniList serves the first 5,000 results — the last reachable page carries a notice saying so, and deeper pages fail with `page_depth_exceeded`
 
 ---
 
@@ -80,17 +82,17 @@ All resource data is also reachable via tools. Use `anime_search_media` to disco
 
 ### `anime_get_schedule` <sub>tool</sub>
 
-- Two modes: `season` (all anime airing in a season/year — both `season` and `season_year` required) and `upcoming` (next episode per airing title within `days_ahead`, default 7, max 30)
-- `invalid_season` when mode is `season` but `season`/`season_year` is missing
-- Adult titles excluded by default (`include_adult`); pagination via `page`/`per_page` (max 50)
+- Two modes: `season` (all anime airing in a season/year — both `season` and `season_year` required) and `upcoming` (next episode per airing title within `days_ahead`, 7 when omitted, max 30)
+- `invalid_season` when mode is `season` but `season`/`season_year` is missing; `conflicting_inputs` when a mode gets the other mode's fields (`upcoming` with `season`/`season_year`, `season` with `days_ahead`)
+- Adult titles excluded by default (`include_adult`); pagination via `page`/`per_page` (max 50), driven by `has_next_page`. In season mode `total_results` is exact and appears only on the final page; AniList serves the first 5,000 entries — the last reachable page carries a notice saying so, and deeper pages fail with `page_depth_exceeded`
 - Airing timestamps are UTC ISO 8601, with `time_until_airing_seconds` for countdowns
 
 ---
 
 ### `anime_find_characters` <sub>tool</sub>
 
-- Three lookup modes: `id` (media → cast), `character_name`, or `voice_actor_name` — at least one identifier required, or `missing_identifier`; when several are supplied, `id` takes precedence, then `character_name`
-- By-media mode supports a `language` filter over AniList's `StaffLanguage` enum (JAPANESE, ENGLISH, KOREAN, etc.)
+- Three lookup modes: `id` (media → cast), `character_name`, or `voice_actor_name` — exactly one per call. None fails `missing_identifier`; more than one fails `conflicting_inputs`. Names are trimmed, and a blank name counts as absent
+- By-media mode supports a `language` filter over AniList's `StaffLanguage` enum (JAPANESE, ENGLISH, KOREAN, etc.); `language` with a name search fails `conflicting_inputs`
 - Cast list capped at `per_page` (max 25); a capped page returns `truncated: true` with next-page guidance
 - `media_not_found` / `not_found` distinguish an invalid media ID from a name search with no match
 
@@ -109,17 +111,19 @@ All resource data is also reachable via tools. Use `anime_search_media` to disco
 ### `anime_get_rankings` <sub>tool</sub>
 
 - Three modes: `top` (all-time by score), `trending` (current week), `seasonal` (current or specified season/year, sorted by popularity)
-- Filterable by `genre` and `format`; adult content excluded by default (`include_adult`)
-- Pagination via `page`/`per_page` (max 50); each entry carries a 1-based `rank`
+- Filterable by `genre`, `tag` (an AniList tag name such as `Isekai`), and `format` in every mode; blank values count as absent. Adult content excluded by default (`include_adult`)
+- `seasonal` takes `season` and `season_year` together, or neither for the current season (`invalid_season` otherwise); in `top`/`trending` they restrict the ranking, and `season_label` names the applied filter
+- Pagination via `page`/`per_page` (max 50), driven by `has_next_page`; each entry carries a 1-based `rank`. `total_results` is exact and appears only on the final page; AniList serves the first 5,000 entries — the last reachable page carries a notice saying so, and deeper pages fail with `page_depth_exceeded`
 
 ---
 
 ### `anime_get_studio` <sub>tool</sub>
 
-- Look up by `name` (search) or `id` (direct AniList studio ID) — at least one required, or `missing_identifier`; `id` takes precedence when both are supplied
+- Look up by `name` (search, trimmed) or `id` (direct AniList studio ID) — exactly one: neither fails `missing_identifier`, both fail `conflicting_inputs`; a blank `name` counts as absent
 - Filmography sortable by `POPULARITY_DESC` (default), `SCORE_DESC`, `START_DATE_DESC`, or `START_DATE`
+- One row per distinct title on a page, with `is_main_studio` set when any of the studio's credits on it is a main-studio credit
 - `not_found` when neither the name search nor the ID lookup resolves
-- Pagination via `page`/`per_page` (max 50)
+- Pagination via `page`/`per_page` (max 25, AniList's page size for a studio's titles), driven by `has_next_page`; `total_titles` is exact only when the whole filmography fits on page 1
 
 ---
 
