@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.2.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/anime-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.0.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/anime-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/anime-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.0-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.2.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/anime-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.2.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/anime-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/anime-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.2-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -52,92 +52,72 @@ All resource data is also reachable via tools. Use `anime_search_media` to disco
 
 ### `anime_search_media` <sub>tool</sub>
 
-- Free-text title search with AniList primary. When AniList has no match at all for a query-only search, it falls back to Jikan (MAL) and maps the rows to AniList IDs, honoring `include_adult`. The fallback runs only at `per_page` 25 or less (Jikan's page size); above that, or if Jikan is unavailable, the AniList empty page comes back with a notice instead of an error
-- Filter by genre, tag, season/year, format (`TV`, `MOVIE`, `OVA`, `MANGA`, `NOVEL`, etc.), and status (`RELEASING`, `FINISHED`, etc.); up to 5 sort values
-- Needs at least one criterion; blank or whitespace `query`/`genre`/`tag` values count as absent, and a sort other than `SEARCH_MATCH` alone browses the catalog (`missing_criteria` otherwise)
-- Default sort: `SEARCH_MATCH` with a `query`, `POPULARITY_DESC` without one
-- Adult content gated behind explicit `include_adult: true` (default off)
-- Pagination via `page` and `per_page` (max 50), driven by `has_next_page`; `total_results` is exact and appears only on the final page. AniList serves the first 5,000 results — the last reachable page carries a notice saying so, and deeper pages fail with `page_depth_exceeded`
+- Search anime or manga by title, genre, tag, season/year, format, status, or up to 5 sort values; at least one criterion is required. `page`/`per_page` pages results (max 50), and `include_adult: true` opts into adult titles
+- Results carry AniList IDs, titles, scores, and episode/chapter counts. AniList is primary; title-only searches with no match can fall back to Jikan at `per_page` 25 or less. Follow `has_next_page`; `total_results` is exact only on the final page
 
 ---
 
 ### `anime_get_media` <sub>tool</sub>
 
-- AniList full-detail query supplemented in parallel by Jikan (MAL score) and Kitsu (streaming links with sub/dub language flags) via `Promise.allSettled`; `data_sources` flags which succeeded
-- AniList and MAL scores surfaced side by side — never blended — plus AniList weighted average/popularity and MAL rank/popularity
-- Tags carry an `is_spoiler` flag from AniList's `isGeneralSpoiler`; the formatted text view hides spoiler and adult tags while the full array stays in structured output
-- Streaming links: Kitsu primary (with per-platform sub/dub language lists), AniList `externalLinks` fallback when Kitsu has none
-- `not_found` when the AniList ID doesn't resolve — use `anime_search_media` first
+- Fetch full detail by AniList `id`, with adult content requiring `include_adult: true`; discover IDs through `anime_search_media`
+- Returns synopsis, genres, spoiler-flagged tags, studios, direct relations, images, streaming links, and separate AniList/MAL scores. `data_sources` identifies successful supplements; `not_found` means the ID did not resolve
 
 ---
 
 ### `anime_get_relations` <sub>tool</sub>
 
-- Multi-hop BFS over AniList's relation graph, up to `max_depth` hops (default 2, max 4)
-- Entries split into `main` (source, adaptation, prequel, sequel — canonical story) and `supplementary` (side story, spin-off, compilation, and similar) via `watch_order_category`
-- Each entry includes `season_year` and episode/chapter count for context
-- `not_found` when the root AniList ID doesn't resolve
+- Walk a franchise from an AniList `id` up to `max_depth` hops (default 2, max 4)
+- Returns `main` and `supplementary` entries with season year and episode/chapter counts, ordered by relation priority then year. `not_found` means the root ID did not resolve
 
 ---
 
 ### `anime_get_schedule` <sub>tool</sub>
 
-- Two modes: `season` (all anime airing in a season/year — both `season` and `season_year` required) and `upcoming` (next episode per airing title within `days_ahead`, 7 when omitted, max 30)
-- `invalid_season` when mode is `season` but `season`/`season_year` is missing; `conflicting_inputs` when a mode gets the other mode's fields (`upcoming` with `season`/`season_year`, `season` with `days_ahead`)
-- Adult titles excluded by default (`include_adult`); pagination via `page`/`per_page` (max 50), driven by `has_next_page`. In season mode `total_results` is exact and appears only on the final page; AniList serves the first 5,000 entries — the last reachable page carries a notice saying so, and deeper pages fail with `page_depth_exceeded`
-- Airing timestamps are UTC ISO 8601, with `time_until_airing_seconds` for countdowns
+- `season` mode requires `season` and `season_year`; `upcoming` uses `days_ahead` (default 7, max 30). Page with `page`/`per_page` (max 50); adult titles require `include_adult: true`
+- Returns UTC ISO 8601 airing times and `time_until_airing_seconds`. Follow `has_next_page`; `total_results` is exact only on the final season page. `invalid_season` and `conflicting_inputs` identify invalid mode inputs
 
 ---
 
 ### `anime_find_characters` <sub>tool</sub>
 
-- Three lookup modes: `id` (media → cast), `character_name`, or `voice_actor_name` — exactly one per call. None fails `missing_identifier`; more than one fails `conflicting_inputs`. Names are trimmed, and a blank name counts as absent
-- By-media mode supports a `language` filter over AniList's `StaffLanguage` enum (JAPANESE, ENGLISH, KOREAN, etc.); `language` with a name search fails `conflicting_inputs`
-- Cast list capped at `per_page` (max 25); a capped page returns `truncated: true` with next-page guidance
-- `media_not_found` / `not_found` distinguish an invalid media ID from a name search with no match
+- Supply exactly one of media `id`, `character_name`, or `voice_actor_name`. `language` filters only media cast lookups; `per_page` is capped at 25
+- Returns cast, voice actors, or media appearances according to `mode`. `truncated: true` carries next-page guidance for capped cast lists; `media_not_found`/`not_found` distinguish an unknown media ID from an unmatched name
 
 ---
 
 ### `anime_get_recommendations` <sub>tool</sub>
 
-- Returns AniList recommendations, adding Jikan/MAL vote counts when the same recommendation appears in both sources; `sources` identifies each contribution
-- Scores stay separate — `anilist_rating` and `jikan_votes` are never blended into one figure
-- Optional `liked_aspects` free-text field is echoed back unmodified, for the caller to contextualize picks
-- AniList page capped at `per_page` (max 25); a capped page returns `truncated: true` with next-page guidance
-- `not_found` when the source AniList ID doesn't resolve
+- Fetch recommendations for an AniList `id`, paging with `page`/`per_page` (max 25); optional `liked_aspects` is echoed unchanged
+- Returns separate `anilist_rating` and `jikan_votes`, with `sources` identifying each contribution. `truncated: true` supplies next-page guidance; `not_found` means the source ID did not resolve
 
 ---
 
 ### `anime_get_rankings` <sub>tool</sub>
 
-- Three modes: `top` (all-time by score), `trending` (current week), `seasonal` (current or specified season/year, sorted by popularity)
-- Filterable by `genre`, `tag` (an AniList tag name such as `Isekai`), and `format` in every mode; blank values count as absent. Adult content excluded by default (`include_adult`)
-- `seasonal` takes `season` and `season_year` together, or neither for the current season (`invalid_season` otherwise); in `top`/`trending` they restrict the ranking, and `season_label` names the applied filter
-- Pagination via `page`/`per_page` (max 50), driven by `has_next_page`; each entry carries a 1-based `rank`. `total_results` is exact and appears only on the final page; AniList serves the first 5,000 entries — the last reachable page carries a notice saying so, and deeper pages fail with `page_depth_exceeded`
+- Rank `ANIME` or `MANGA` in `top`, `trending`, or `seasonal` mode, with genre/tag/format filters and `page`/`per_page` (max 50). Adult titles require `include_adult: true`
+- Entries carry 1-based `rank` and `season_label`. Follow `has_next_page`; `total_results` is exact only on the final page. Seasonal mode takes `season`/`season_year` together or neither for the current season (`invalid_season` otherwise)
 
 ---
 
 ### `anime_get_studio` <sub>tool</sub>
 
-- Look up by `name` (search, trimmed) or `id` (direct AniList studio ID) — exactly one: neither fails `missing_identifier`, both fail `conflicting_inputs`; a blank `name` counts as absent
-- Filmography sortable by `POPULARITY_DESC` (default), `SCORE_DESC`, `START_DATE_DESC`, or `START_DATE`
-- One row per distinct title on a page, with `is_main_studio` set when any of the studio's credits on it is a main-studio credit
-- `not_found` when neither the name search nor the ID lookup resolves
-- Pagination via `page`/`per_page` (max 25, AniList's page size for a studio's titles), driven by `has_next_page`; `total_titles` is exact only when the whole filmography fits on page 1
+- Identify a studio with exactly one of `name` or `id`; sort by popularity, score, or release date and page with `page`/`per_page` (max 25)
+- Returns one row per distinct title within the page, with `is_main_studio` identifying main credits. Follow `has_next_page`; `total_titles` is exact only when the whole filmography fits on page 1. `not_found` means the studio did not resolve
 
 ---
 
 ### `anime://media/{id}` <sub>resource</sub>
 
-- Compact media record as `application/json` — title variants, synopsis, scores, genres, streaming count, cover image
-- `id` comes from `anime_search_media` or `anime_get_media`
-- A flatter subset of `anime_get_media` — no tags, studios, streaming links, or relations
+- Read a compact `application/json` media record using an AniList `id` from `anime_search_media` or `anime_get_media`
+- Returns title variants, synopsis, scores, genres, streaming count, and cover image; use `anime_get_media` for tags, studios, streaming links, and relations
 
 ---
 
 ## Features
 
 Built on [`@cyanheads/mcp-ts-core`](https://github.com/cyanheads/mcp-ts-core): stdio and Streamable HTTP transports, pluggable auth (`none` / `jwt` / `oauth`), swappable storage (`in-memory`, `filesystem`, `Supabase`, `Cloudflare KV/R2/D1`), structured logging with optional OpenTelemetry tracing.
+
+AniList serves only the first 5,000 search, season, and ranking entries. The last reachable page carries a notice when more matches exist; deeper pages fail with `page_depth_exceeded`. Narrow the criteria or request a lower page.
 
 Anime/manga-specific:
 
@@ -267,6 +247,7 @@ No server-specific env vars are required. All framework variables are optional w
 | `MCP_SESSION_MODE` | Overrides the source-declared default: `auto`, `stateful`, or `stateless`. The framework schema default `auto` resolves to `stateful`. | `stateless` |
 | `MCP_AUTH_MODE` | Auth mode: `none`, `jwt`, or `oauth`. | `none` |
 | `MCP_LOG_LEVEL` | Log level (RFC 5424): `debug`, `info`, `notice`, `warning`, `error`. | `info` |
+| `LOG_TOOL_FAILURE_PAYLOADS` | Log failed calls' arguments and results, redacted by key name and capped at `LOG_TOOL_FAILURE_PAYLOAD_MAX_BYTES` (default `16384`). Secrets inside free-form values are not redacted. | `false` |
 | `OTEL_ENABLED` | Enable [OpenTelemetry instrumentation](https://github.com/cyanheads/mcp-ts-core/tree/main/docs/telemetry). | `false` |
 
 See [`.env.example`](./.env.example) for the full list of optional overrides.
