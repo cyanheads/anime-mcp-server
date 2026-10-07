@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.1](changelog/0.2.x/0.2.1.md) — 2026-10-07
+
+Adopt framework error correlation and fix registry launches and multi-arch distribution.
+
 ## [0.2.0](changelog/0.2.x/0.2.0.md) — 2026-09-24 · ⚠️ Breaking
 
 Rejects empty and contradictory tool inputs, reports only exact result counts, types AniList's page-depth refusal, and narrows the MyAnimeList search fallback to title-only queries AniList has no match for.

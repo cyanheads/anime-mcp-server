@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "anime-mcp-server",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Search anime/manga, get full detail, franchise watch order, seasonal schedule, characters, rankings, and studio filmography via MCP. STDIO or Streamable HTTP.",
   "author": {
     "name": "Casey Hand",
