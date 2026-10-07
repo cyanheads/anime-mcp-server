@@ -178,7 +178,6 @@ export const animeGetSchedule = tool('anime_get_schedule', {
       throw ctx.fail(
         'conflicting_inputs',
         `mode "${input.mode}" does not use ${irrelevant.join(', ')}; drop ${irrelevant.length > 1 ? 'them' : 'it'} or switch mode`,
-        ctx.recoveryFor('conflicting_inputs'),
       );
     }
 
@@ -187,7 +186,6 @@ export const animeGetSchedule = tool('anime_get_schedule', {
         throw ctx.fail(
           'invalid_season',
           'mode "season" requires both season and season_year parameters',
-          { ...ctx.recoveryFor('invalid_season') },
         );
       }
 

@@ -227,21 +227,18 @@ export const animeFindCharacters = tool('anime_find_characters', {
       throw ctx.fail(
         'missing_identifier',
         'Provide at least one of: id, character_name, or voice_actor_name',
-        { ...ctx.recoveryFor('missing_identifier') },
       );
     }
     if (identifiers.length > 1) {
       throw ctx.fail(
         'conflicting_inputs',
         `Send one lookup identifier per call; got ${identifiers.join(', ')}`,
-        ctx.recoveryFor('conflicting_inputs'),
       );
     }
     if (input.language && input.id === undefined) {
       throw ctx.fail(
         'conflicting_inputs',
         'language filters the cast of a title, so it applies only with id, not with a name search',
-        ctx.recoveryFor('conflicting_inputs'),
       );
     }
 
@@ -301,9 +298,7 @@ export const animeFindCharacters = tool('anime_find_characters', {
       const character = await anilist.searchCharacter(characterName, input.page, input.per_page);
 
       if (!character) {
-        throw ctx.fail('not_found', `No character found matching "${characterName}"`, {
-          ...ctx.recoveryFor('not_found'),
-        });
+        throw ctx.fail('not_found', `No character found matching "${characterName}"`);
       }
 
       // Map each media appearance as a character entry so the agent can see
@@ -362,11 +357,7 @@ export const animeFindCharacters = tool('anime_find_characters', {
     // Mode C: by voice actor name
     const vaName = voiceActorName;
     if (!vaName) {
-      throw ctx.fail(
-        'missing_identifier',
-        'voice_actor_name is required for name-based lookup',
-        ctx.recoveryFor('missing_identifier'),
-      );
+      throw ctx.fail('missing_identifier', 'voice_actor_name is required for name-based lookup');
     }
 
     ctx.log.info('Searching VA by name', { name: vaName });
@@ -374,9 +365,7 @@ export const animeFindCharacters = tool('anime_find_characters', {
     const staff = await anilist.searchStaff(vaName, input.page, input.per_page);
 
     if (!staff) {
-      throw ctx.fail('not_found', `No voice actor/staff found matching "${vaName}"`, {
-        ...ctx.recoveryFor('not_found'),
-      });
+      throw ctx.fail('not_found', `No voice actor/staff found matching "${vaName}"`);
     }
 
     return {

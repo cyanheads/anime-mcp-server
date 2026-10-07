@@ -194,7 +194,6 @@ export const animeGetRankings = tool('anime_get_rankings', {
       throw ctx.fail(
         'invalid_season',
         `mode "seasonal" needs season and season_year together; got only ${input.season ? 'season' : 'season_year'}`,
-        ctx.recoveryFor('invalid_season'),
       );
     }
 

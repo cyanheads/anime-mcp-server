@@ -163,16 +163,10 @@ export const animeGetStudio = tool('anime_get_studio', {
     const name = input.name?.trim() || undefined;
 
     if (input.id !== undefined && name) {
-      throw ctx.fail(
-        'conflicting_inputs',
-        'Send either id or name to look up a studio, not both',
-        ctx.recoveryFor('conflicting_inputs'),
-      );
+      throw ctx.fail('conflicting_inputs', 'Send either id or name to look up a studio, not both');
     }
     if (input.id === undefined && !name) {
-      throw ctx.fail('missing_identifier', 'Provide either name or id to look up a studio', {
-        ...ctx.recoveryFor('missing_identifier'),
-      });
+      throw ctx.fail('missing_identifier', 'Provide either name or id to look up a studio');
     }
 
     let studio: Awaited<ReturnType<typeof anilist.getStudioById>>;
@@ -201,7 +195,6 @@ export const animeGetStudio = tool('anime_get_studio', {
         input.id !== undefined
           ? `No studio found with AniList ID ${input.id}`
           : `No studio found matching "${name}"`,
-        { ...ctx.recoveryFor('not_found') },
       );
     }
 

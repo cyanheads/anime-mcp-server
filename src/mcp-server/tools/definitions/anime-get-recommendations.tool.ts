@@ -131,9 +131,7 @@ export const animeGetRecommendations = tool('anime_get_recommendations', {
     // Need media detail for idMal and type
     const mediaDetail = await anilist.getMediaById(input.id);
     if (!mediaDetail) {
-      throw ctx.fail('not_found', `No media found with AniList ID ${input.id}`, {
-        ...ctx.recoveryFor('not_found'),
-      });
+      throw ctx.fail('not_found', `No media found with AniList ID ${input.id}`);
     }
     const idMal = mediaDetail.idMal ?? null;
     const mediaType = mediaDetail.type;

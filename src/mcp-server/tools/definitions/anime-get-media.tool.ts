@@ -186,9 +186,7 @@ export const animeGetMedia = tool('anime_get_media', {
     const detail = await anilist.getMediaById(input.id, input.include_adult);
 
     if (!detail) {
-      throw ctx.fail('not_found', `No media found with AniList ID ${input.id}`, {
-        ...ctx.recoveryFor('not_found'),
-      });
+      throw ctx.fail('not_found', `No media found with AniList ID ${input.id}`);
     }
 
     const mediaType = detail.type;
