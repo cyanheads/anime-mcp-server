@@ -7,7 +7,7 @@
 # The --platform guard keeps the build stage on the caller's native platform —
 # multi-arch builds abort under QEMU on Bun 1.4 without it.
 # ==============================================================================
-FROM --platform=$BUILDPLATFORM oven/bun:1.4.0 AS build
+FROM --platform=$BUILDPLATFORM oven/bun:1.4.2 AS build
 
 WORKDIR /usr/src/app
 
@@ -25,6 +25,38 @@ COPY . .
 # Build the application
 RUN bun run build
 
+# Install target-platform production dependencies on the native build platform.
+FROM --platform=$BUILDPLATFORM oven/bun:1.4.2 AS deps
+
+WORKDIR /usr/src/app
+COPY package.json bun.lock bunfig.toml ./
+COPY --from=build /usr/src/app/node_modules/@socketsecurity/bun-security-scanner ./node_modules/@socketsecurity/bun-security-scanner
+
+ARG TARGETOS
+ARG TARGETARCH
+RUN case "$TARGETARCH" in \
+      amd64) echo x64 ;; \
+      arm64) echo arm64 ;; \
+      *) echo "Unsupported TARGETARCH '$TARGETARCH': expected amd64 or arm64" >&2; exit 1 ;; \
+    esac > .bun-cpu
+
+RUN --mount=type=cache,target=/root/.bun/install/cache \
+    bun install --production --omit=peer --frozen-lockfile --ignore-scripts \
+      --os="$TARGETOS" --cpu="$(cat .bun-cpu)"
+
+# Install the framework's optional telemetry peers from its declared ranges.
+COPY scripts/install-otel.ts ./scripts/
+ARG OTEL_ENABLED=true
+RUN --mount=type=cache,target=/root/.bun/install/cache \
+    if [ "$OTEL_ENABLED" = "true" ]; then \
+      bun scripts/install-otel.ts --os="$TARGETOS" --cpu="$(cat .bun-cpu)"; \
+    fi
+
+# The Debian runtime loads glibc bindings; discard musl-only packages.
+COPY scripts/prune-musl-packages.ts ./scripts/
+RUN bun scripts/prune-musl-packages.ts
+RUN rm -rf node_modules/@socketsecurity/bun-security-scanner
+
 
 # ==============================================================================
 # Production Stage
@@ -33,7 +65,7 @@ RUN bun run build
 # application. It uses a slim base image and only includes production
 # dependencies and build artifacts.
 # ==============================================================================
-FROM oven/bun:1.4.0-slim AS production
+FROM oven/bun:1.4.2-slim AS production
 
 WORKDIR /usr/src/app
 
@@ -42,41 +74,16 @@ WORKDIR /usr/src/app
 ENV NODE_ENV=production
 
 # OCI image metadata (https://github.com/opencontainers/image-spec/blob/main/annotations.md)
+ARG APP_VERSION
 LABEL org.opencontainers.image.title="anime-mcp-server"
-LABEL org.opencontainers.image.description="Search anime/manga, get full detail, watch order, schedule, characters, rankings, and studio filmography."
+LABEL org.opencontainers.image.description="Search anime/manga, get full detail, franchise watch order, seasonal schedule, characters, rankings, and studio filmography via MCP. STDIO or Streamable HTTP."
 LABEL org.opencontainers.image.source="https://github.com/cyanheads/anime-mcp-server"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
+LABEL org.opencontainers.image.version="${APP_VERSION}"
 
-# Copy dependency manifests
-COPY package.json bun.lock ./
-
-# Install only production dependencies, ignoring any lifecycle scripts (like 'prepare')
-# that are not needed in the final production image.
-# `--omit=peer` drops the framework's optional peer tiers (test runner, service
-# SDKs, parsers) that Bun would otherwise auto-install. Anything this server
-# actually imports belongs in its own `dependencies`, so nothing needed at
-# runtime is lost. The OTEL step below carries the same flag — without it, that
-# install re-resolves the graph and pulls every optional peer back in.
-RUN --mount=type=cache,target=/root/.bun/install/cache \
-    bun install --production --omit=peer --frozen-lockfile --ignore-scripts
-
-# Conditionally install OpenTelemetry optional peer dependencies (Tier 3).
-# These are not bundled by default to keep the base image lean. Enable at build time
-# with: docker build --build-arg OTEL_ENABLED=true
-ARG OTEL_ENABLED=true
-RUN --mount=type=cache,target=/root/.bun/install/cache \
-    if [ "$OTEL_ENABLED" = "true" ]; then \
-      bun add --omit=dev --omit=peer --ignore-scripts @hono/otel \
-        @opentelemetry/instrumentation-http \
-        @opentelemetry/exporter-metrics-otlp-http \
-        @opentelemetry/exporter-trace-otlp-http \
-        @opentelemetry/instrumentation-pino \
-        @opentelemetry/resources \
-        @opentelemetry/sdk-metrics \
-        @opentelemetry/sdk-node \
-        @opentelemetry/sdk-trace-node \
-        @opentelemetry/semantic-conventions; \
-    fi
+# Copy the unmodified runtime manifest and target dependency tree.
+COPY package.json ./
+COPY --from=deps /usr/src/app/node_modules ./node_modules
 
 # Copy the compiled application code from the build stage
 COPY --from=build /usr/src/app/dist ./dist
@@ -107,7 +114,6 @@ ENV MCP_TRANSPORT_TYPE="http"
 ENV MCP_SESSION_MODE="stateless"
 ENV MCP_LOG_LEVEL="info"
 ENV LOGS_DIR="/var/log/anime-mcp-server"
-ENV MCP_FORCE_CONSOLE_LOGGING="true"
 
 # Expose the port the server listens on
 EXPOSE ${MCP_HTTP_PORT}
