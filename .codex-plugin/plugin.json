@@ -1,6 +1,6 @@
 {
   "name": "anime-mcp-server",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Search anime/manga, get full detail, franchise relations, seasonal schedule, characters, rankings, and studio filmography via MCP. STDIO or Streamable HTTP.",
   "author": {
     "name": "Casey Hand",

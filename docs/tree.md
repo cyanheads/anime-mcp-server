@@ -1,6 +1,6 @@
 # anime-mcp-server - Directory Structure
 
-Generated on: 2026-10-13 12:34:39
+Generated on: 2026-10-13 13:00:04
 
 ```text
 anime-mcp-server/
@@ -26,6 +26,7 @@ anime-mcp-server/
 ├── changelog/
 │   ├── 0.1.x/
 │   ├── 0.2.x/
+│   ├── 0.3.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md

@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.0](changelog/0.3.x/0.3.0.md) — 2026-10-13 · ⚠️ Breaking
+
+Accurate franchise relations, restored character voice actors, and complete same-page text retrieval.
+
 ## [0.2.1](changelog/0.2.x/0.2.1.md) — 2026-10-07
 
 Adopt framework error correlation and fix registry launches and multi-arch distribution.
