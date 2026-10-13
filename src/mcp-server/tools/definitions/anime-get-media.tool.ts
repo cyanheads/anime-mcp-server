@@ -9,6 +9,7 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import * as anilist from '@/services/anilist/anilist-service.js';
 import * as jikan from '@/services/jikan/jikan-service.js';
 import * as kitsu from '@/services/kitsu/kitsu-service.js';
+import { fullTextJson, summaryView } from '../render-text.js';
 
 export const animeGetMedia = tool('anime_get_media', {
   description:
@@ -19,10 +20,17 @@ export const animeGetMedia = tool('anime_get_media', {
   annotations: { readOnlyHint: true, idempotentHint: true },
 
   input: z.object({
+    full_text: z
+      .boolean()
+      .default(false)
+      .describe(
+        'Render complete domain JSON in text, including full synopsis and every tag/relation on this response. Default false uses bounded summaries.',
+      ),
     id: z
       .number()
       .int()
       .min(1)
+      .max(2147483647)
       .describe('AniList media ID. Obtain from anime_search_media results.'),
     include_adult: z
       .boolean()
@@ -31,6 +39,7 @@ export const animeGetMedia = tool('anime_get_media', {
   }),
 
   output: z.object({
+    full_text: z.boolean().describe('Whether text renders the complete domain result as JSON.'),
     id: z.number().int().describe('AniList media ID.'),
     id_mal: z
       .number()
@@ -148,7 +157,7 @@ export const animeGetMedia = tool('anime_get_media', {
           .describe('A relation entry.'),
       )
       .describe(
-        'Direct relations. Use anime_get_relations for full franchise walk-order across multiple hops.',
+        'Direct relations. Use anime_get_relations for a depth-bounded relation graph with heuristic ordering.',
       ),
     cover_image_url: z.string().nullable().describe('Cover image URL (extra large), or null.'),
     banner_image_url: z.string().nullable().describe('Banner image URL, or null.'),
@@ -257,6 +266,7 @@ export const animeGetMedia = tool('anime_get_media', {
         : (detail.season ?? null);
 
     return {
+      full_text: input.full_text,
       id: detail.id,
       id_mal: detail.idMal ?? null,
       type: detail.type,
@@ -325,6 +335,9 @@ export const animeGetMedia = tool('anime_get_media', {
   },
 
   format: (result) => {
+    if (result.full_text) return [{ type: 'text', text: fullTextJson(result) }];
+    const omittedCharacters = Math.max(0, (result.description?.length ?? 0) - 500);
+    result = summaryView({ ...result, description: result.description?.slice(0, 500) ?? null });
     const title = result.title.english ?? result.title.romaji ?? result.title.native ?? 'Unknown';
     const lines: string[] = [];
 
@@ -343,10 +356,7 @@ export const animeGetMedia = tool('anime_get_media', {
     if (meta.length) lines.push(meta.join(' · '), '');
 
     if (result.description) {
-      lines.push(
-        result.description.slice(0, 500) + (result.description.length > 500 ? '…' : ''),
-        '',
-      );
+      lines.push(result.description + (omittedCharacters > 0 ? '…' : ''), '');
     }
 
     // Scores
@@ -368,7 +378,7 @@ export const animeGetMedia = tool('anime_get_media', {
     const visibleTags = result.tags.filter((t) => !t.is_spoiler && !t.is_adult).slice(0, 10);
     if (visibleTags.length) lines.push(`**Tags:** ${visibleTags.map((t) => t.name).join(', ')}`);
     const spoilerCount = result.tags.filter((t) => t.is_spoiler).length;
-    if (spoilerCount) lines.push(`*${spoilerCount} spoiler tag(s) hidden. See tags array.*`);
+    if (spoilerCount) lines.push(`*${spoilerCount} spoiler tag(s) hidden from the tag summary.*`);
     if (result.genres.length || visibleTags.length) lines.push('');
 
     // Studios
@@ -471,6 +481,11 @@ export const animeGetMedia = tool('anime_get_media', {
       );
     }
 
+    const omittedTags = Math.max(0, result.tags.length - 5);
+    const omittedRelations = Math.max(0, result.relations.length - 5);
+    lines.push(
+      `full_text: false · ${omittedCharacters} synopsis characters omitted · ${omittedTags} tag details omitted · ${omittedRelations} relation details omitted. Repeat the same input with full_text: true to retrieve the complete domain result, including spoiler/adult tag flags, without advancing pagination.`,
+    );
     return [{ type: 'text', text: lines.join('\n') }];
   },
 });

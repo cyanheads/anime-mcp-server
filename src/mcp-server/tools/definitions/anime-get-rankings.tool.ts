@@ -13,6 +13,7 @@ import {
   PAGE_DEPTH_EDGE_NOTICE,
   pastEndNotice,
 } from '@/services/anilist/pagination.js';
+import { summaryView } from '../render-text.js';
 
 const SeasonEnum = z
   .enum(['WINTER', 'SPRING', 'SUMMER', 'FALL'])
@@ -48,7 +49,7 @@ export const animeGetRankings = tool('anime_get_rankings', {
   description:
     'Top, trending, or seasonal rankings. Filterable by genre, tag, and format. ' +
     '"top" returns all-time by score; "trending" returns current week; ' +
-    '"seasonal" returns the current or specified season sorted by popularity.',
+    '"seasonal" returns the current or specified ANIME season sorted by popularity; MANGA supports top/trending without season/year filters.',
   annotations: { readOnlyHint: true, openWorldHint: true },
 
   input: z.object({
@@ -59,8 +60,14 @@ export const animeGetRankings = tool('anime_get_rankings', {
           '"trending": most active this week. ' +
           '"seasonal": most popular in the current or specified season/year.',
       ),
-    media_type: z.enum(['ANIME', 'MANGA']).describe('Media type to rank.'),
-    format: FormatEnum.optional(),
+    media_type: z
+      .enum(['ANIME', 'MANGA'])
+      .describe(
+        'Media type to rank. MANGA supports top/trending without season or season_year; broadcast seasons apply only to ANIME.',
+      ),
+    format: FormatEnum.or(z.literal(''))
+      .optional()
+      .describe('Format filter; exact blank counts as absent.'),
     genre: z
       .string()
       .max(100)
@@ -73,10 +80,12 @@ export const animeGetRankings = tool('anime_get_rankings', {
       .describe(
         'AniList tag filter, e.g. "Isekai", "Found Family". Genres such as "Action" are not tags. Trimmed; blank counts as absent.',
       ),
-    season: SeasonEnum.optional().describe(
-      '"seasonal" mode: the season to rank, given together with season_year (omit both for the current season). ' +
-        '"top"/"trending": restricts the ranking to titles from this season; without season_year it matches that season in every year.',
-    ),
+    season: SeasonEnum.or(z.literal(''))
+      .optional()
+      .describe(
+        '"seasonal" mode: the season to rank, given together with season_year (omit both for the current season). ' +
+          '"top"/"trending": restricts the ranking to titles from this season; without season_year it matches that season in every year.',
+      ),
     season_year: z
       .number()
       .int()
@@ -125,6 +134,13 @@ export const animeGetRankings = tool('anime_get_rankings', {
   },
 
   errors: [
+    {
+      reason: 'anime_only_season',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'MANGA is requested with seasonal mode or a season/season_year filter',
+      recovery:
+        'Anime broadcast seasons apply only to ANIME. For MANGA, use top or trending without season or season_year filters.',
+    },
     {
       reason: 'invalid_season',
       code: JsonRpcErrorCode.ValidationError,
@@ -190,6 +206,13 @@ export const animeGetRankings = tool('anime_get_rankings', {
     const genre = present(input.genre);
     const tag = present(input.tag);
 
+    if (
+      input.media_type === 'MANGA' &&
+      (input.mode === 'seasonal' || input.season || input.season_year !== undefined)
+    ) {
+      throw ctx.fail('anime_only_season', 'MANGA rankings cannot use anime broadcast seasons.');
+    }
+
     if (input.mode === 'seasonal' && !input.season !== !input.season_year) {
       throw ctx.fail(
         'invalid_season',
@@ -202,10 +225,10 @@ export const animeGetRankings = tool('anime_get_rankings', {
     const page = await anilist.getRankings({
       mediaType: input.media_type,
       mode: input.mode,
-      format: input.format,
+      format: input.format || undefined,
       genre,
       tag,
-      season: input.season,
+      season: input.season || undefined,
       seasonYear: input.season_year,
       page: input.page,
       perPage: input.per_page,
@@ -277,6 +300,7 @@ export const animeGetRankings = tool('anime_get_rankings', {
   },
 
   format: (result) => {
+    result = summaryView(result);
     const seasonSuffix = result.season_label ? ` · ${result.season_label}` : '';
     const modeLabel =
       result.mode === 'top'

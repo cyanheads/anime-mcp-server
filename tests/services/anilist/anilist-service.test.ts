@@ -38,6 +38,84 @@ const mediaNode = {
   coverImage: { extraLarge: null, large: null, medium: null, color: null },
 };
 
+mcpTest(
+  'upcoming schedules request TIME ordering before selecting each page',
+  async ({ fetchMock }) => {
+    const queries: string[] = [];
+    fetchMock.route({
+      method: 'POST',
+      match: 'https://graphql.anilist.co/',
+      respond: async (request) => {
+        const body = (await request.json()) as { query: string; variables: { page: number } };
+        queries.push(body.query);
+        return Response.json({
+          data: {
+            Page: {
+              pageInfo: { hasNextPage: body.variables.page === 1 },
+              airingSchedules: [
+                {
+                  id: body.variables.page,
+                  airingAt: 100,
+                  episode: body.variables.page,
+                  timeUntilAiring: 1,
+                  media: mediaNode,
+                },
+              ],
+            },
+          },
+        });
+      },
+    });
+    const first = await getUpcomingEpisodes({ page: 1, perPage: 1 });
+    const second = await getUpcomingEpisodes({ page: 2, perPage: 1 });
+    expect(queries).toHaveLength(2);
+    for (const query of queries) expect(query).toContain('sort: [TIME]');
+    expect(first.airingSchedules[0]!.airingAt).toBeLessThanOrEqual(
+      second.airingSchedules[0]!.airingAt,
+    );
+    expect(first.hasNextPage).toBe(true);
+    expect(second.hasNextPage).toBe(false);
+  },
+);
+
+mcpTest(
+  'character appearances query only edges with their own media node',
+  async ({ fetchMock }) => {
+    let query = '';
+    fetchMock.route({
+      method: 'POST',
+      match: 'https://graphql.anilist.co/',
+      respond: async (request) => {
+        const body = (await request.json()) as {
+          query: string;
+          variables: Record<string, unknown>;
+        };
+        query = body.query;
+        expect(body.variables).toMatchObject({ search: 'Edward', page: 2, perPage: 5 });
+        return Response.json({
+          data: {
+            Character: {
+              id: 11,
+              name: { full: 'Edward', native: null },
+              image: null,
+              description: null,
+              siteUrl: null,
+              media: {
+                pageInfo: { hasNextPage: true, currentPage: 2 },
+                edges: [{ node: mediaNode, characterRole: 'MAIN', voiceActors: null }],
+              },
+            },
+          },
+        });
+      },
+    });
+    const result = await searchCharacter('Edward', 2, 5);
+    expect(query).not.toMatch(/\bnodes\s*\{/);
+    expect(query).toMatch(/edges\s*\{\s*node\s*\{/);
+    expect(result?.media.edges[0]).toMatchObject({ node: { id: 1 }, voiceActors: null });
+  },
+);
+
 async function requestVariables(request: Request): Promise<Record<string, unknown>> {
   const body = (await request.clone().json()) as { variables: Record<string, unknown> };
   return body.variables;
@@ -137,8 +215,7 @@ mcpTest(
             siteUrl: null,
             media: {
               pageInfo: { hasNextPage: true, currentPage: 1 },
-              nodes: [mediaNode],
-              edges: [{ characterRole: 'MAIN', voiceActors: [] }],
+              edges: [{ node: mediaNode, characterRole: 'MAIN', voiceActors: [] }],
             },
           },
         },
@@ -147,7 +224,7 @@ mcpTest(
 
     const result = await searchCharacter('Spike Spiegel');
 
-    expect(result?.media.nodes[0]?.id).toBe(1);
+    expect(result?.media.edges[0]?.node.id).toBe(1);
     await expect(requestVariables(fetchMock.calls[0]!.request)).resolves.toMatchObject({
       search: 'Spike Spiegel',
       page: 1,
@@ -172,8 +249,7 @@ mcpTest(
             siteUrl: null,
             media: {
               pageInfo: { hasNextPage: false, currentPage: 2 },
-              nodes: [{ ...mediaNode, id: 5 }],
-              edges: [{ characterRole: 'MAIN', voiceActors: [] }],
+              edges: [{ node: { ...mediaNode, id: 5 }, characterRole: 'MAIN', voiceActors: [] }],
             },
           },
         },
@@ -182,7 +258,7 @@ mcpTest(
 
     const result = await searchCharacter('Spike Spiegel', 2, 1);
 
-    expect(result?.media.nodes[0]?.id).toBe(5);
+    expect(result?.media.edges[0]?.node.id).toBe(5);
     await expect(requestVariables(fetchMock.calls[0]!.request)).resolves.toMatchObject({
       search: 'Spike Spiegel',
       page: 2,

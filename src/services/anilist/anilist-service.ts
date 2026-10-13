@@ -289,7 +289,7 @@ export async function getUpcomingEpisodes(params: {
     query UpcomingEpisodes($greaterThan: Int!, $lessThan: Int!, $page: Int, $perPage: Int) {
       Page(page: $page, perPage: $perPage) {
         pageInfo { hasNextPage }
-        airingSchedules(airingAt_greater: $greaterThan, airingAt_lesser: $lessThan) {
+        airingSchedules(airingAt_greater: $greaterThan, airingAt_lesser: $lessThan, sort: [TIME]) {
           id airingAt episode timeUntilAiring
           media { ${MEDIA_NODE_FRAGMENT} }
         }
@@ -389,8 +389,8 @@ export async function searchCharacter(
         siteUrl
         media(page: $page, perPage: $perPage, sort: [POPULARITY_DESC]) {
           pageInfo { hasNextPage currentPage }
-          nodes { ${MEDIA_NODE_FRAGMENT} }
           edges {
+            node { ${MEDIA_NODE_FRAGMENT} }
             characterRole
             voiceActors(sort: [RELEVANCE]) {
               id name { full native } language image { large medium } siteUrl

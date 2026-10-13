@@ -1,11 +1,10 @@
 /**
- * @fileoverview anime://media/{id} resource — full media record by AniList ID.
- * Delegates to the same service layer as anime_get_media for stable URI-injectable context.
+ * @fileoverview anime://media/{id} resource — compact media record by AniList ID.
  * @module mcp-server/resources/definitions/anime-media.resource
  */
 
 import { resource, z } from '@cyanheads/mcp-ts-core';
-import { notFound } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import * as anilist from '@/services/anilist/anilist-service.js';
 import * as jikan from '@/services/jikan/jikan-service.js';
 import * as kitsu from '@/services/kitsu/kitsu-service.js';
@@ -13,8 +12,7 @@ import * as kitsu from '@/services/kitsu/kitsu-service.js';
 export const animeMediaResource = resource('anime://media/{id}', {
   name: 'anime-media',
   description:
-    'Full media record for an anime or manga by AniList ID. ' +
-    'Returns the same data as anime_get_media — title, synopsis, scores, studios, tags, streaming links. ' +
+    'Compact media record for an anime or manga by AniList ID: titles, full normalized synopsis, format, status, season, episode/chapter counts, genres, AniList/MAL scores, streaming count, cover and site URLs. Use anime_get_media for tags, studios and streaming links. ' +
     'Use as a stable URI for injectable context about a specific title.',
   mimeType: 'application/json',
   params: z.object({
@@ -22,6 +20,21 @@ export const animeMediaResource = resource('anime://media/{id}', {
       .string()
       .describe('AniList media ID as a string, e.g. "16498". Obtain from anime_search_media.'),
   }),
+  errors: [
+    {
+      reason: 'not_found',
+      code: JsonRpcErrorCode.NotFound,
+      when: 'A valid media ID has no AniList record',
+      recovery: 'Use anime_search_media to find an existing AniList media ID and retry.',
+    },
+    {
+      reason: 'invalid_id',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'The complete SDK-parsed ID segment is not ASCII decimal digits representing 1–2147483647',
+      recovery:
+        'Use an AniList ID containing only decimal digits with a value from 1 to 2147483647; leading zeros are allowed.',
+    },
+  ],
   output: z.object({
     id: z.number().int().describe('AniList media ID.'),
     id_mal: z.number().int().nullable().describe('MyAnimeList ID, or null.'),
@@ -48,16 +61,19 @@ export const animeMediaResource = resource('anime://media/{id}', {
   }),
 
   async handler(params, ctx) {
-    const numericId = parseInt(params.id, 10);
-    if (Number.isNaN(numericId) || numericId < 1) {
-      throw notFound(`Invalid AniList media ID: ${params.id}`);
+    const numericId = Number(params.id);
+    if (!/^[0-9]+(?![\s\S])/.test(params.id) || numericId < 1 || numericId > 2147483647) {
+      throw ctx.fail(
+        'invalid_id',
+        'AniList media ID must be decimal digits with a value from 1 to 2147483647.',
+      );
     }
 
     ctx.log.info('Fetching anime media resource', { id: numericId });
 
     const detail = await anilist.getMediaById(numericId);
     if (!detail) {
-      throw notFound(`No media found with AniList ID ${numericId}`, { id: numericId });
+      throw ctx.fail('not_found', `No media found with AniList ID ${numericId}`, { id: numericId });
     }
 
     // Fan out to supplements in parallel

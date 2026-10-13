@@ -4,6 +4,7 @@
  */
 
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createWorkerHandler } from '@cyanheads/mcp-ts-core/worker';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeMediaResource } from '@/mcp-server/resources/definitions/anime-media.resource.js';
 import type { MediaDetail } from '@/services/anilist/types.js';
@@ -103,12 +104,114 @@ describe('animeMediaResource', () => {
     vi.resetAllMocks();
   });
 
+  it('preserves leading-zero decimal spelling', async () => {
+    vi.mocked(anilist.getMediaById).mockResolvedValue(mockDetail);
+    const result = await animeMediaResource.handler(
+      { id: '00011757' },
+      createMockContext({ errors: animeMediaResource.errors }),
+    );
+    expect(result.id).toBe(11757);
+    expect(anilist.getMediaById).toHaveBeenCalledWith(11757);
+  });
+
+  it('fills declared resource recovery through the real resource factory', async () => {
+    const worker = createWorkerHandler({
+      name: 'anime-mcp-server',
+      title: 'anime-mcp-server',
+      resources: [animeMediaResource],
+    });
+    const request = new Request('https://example.test/mcp', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+        'MCP-Protocol-Version': '2026-07-28',
+        'Mcp-Method': 'resources/read',
+        'Mcp-Name': 'anime://media/16498junk',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'resources/read',
+        params: {
+          uri: 'anime://media/16498junk',
+          _meta: {
+            'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+            'io.modelcontextprotocol/clientCapabilities': {},
+          },
+        },
+      }),
+    });
+    const response = await worker.fetch(
+      request,
+      { MCP_AUTH_MODE: 'none', LOG_LEVEL: 'fatal' },
+      { waitUntil: vi.fn(), passThroughOnException: vi.fn(), props: {} },
+    );
+    const raw = await response.text();
+    const frame = raw.split('\n').find((line) => line.startsWith('data: '));
+    const payload = JSON.parse(frame ? frame.slice(6) : raw);
+    expect(payload).toMatchObject({
+      error: {
+        code: -32007,
+        data: {
+          reason: 'invalid_id',
+          recovery: {
+            hint: animeMediaResource.errors?.find((entry) => entry.reason === 'invalid_id')
+              ?.recovery,
+          },
+        },
+      },
+    });
+    expect(anilist.getMediaById).not.toHaveBeenCalled();
+  });
+
+  it('bounds decimal-segment validation thread CPU through a 64x span', async () => {
+    const ctx = createMockContext({ errors: animeMediaResource.errors });
+    const measurements = [];
+    for (const length of [5000, 20000, 80000, 320000]) {
+      const id = `${'0'.repeat(length - 1)}x`;
+      const start = process.threadCpuUsage();
+      for (let repeat = 0; repeat < 20; repeat++)
+        await expect(animeMediaResource.handler({ id }, ctx)).rejects.toMatchObject({
+          data: { reason: 'invalid_id' },
+        });
+      const usage = process.threadCpuUsage(start);
+      measurements.push({ length, microseconds: (usage.user + usage.system) / 20 });
+    }
+    expect(measurements[3]!.microseconds / measurements[0]!.microseconds).toBeLessThan(256);
+    expect(measurements[3]!.microseconds).toBeLessThan(500000);
+    console.info('decimal-segment thread CPU microseconds/call', measurements);
+    expect(anilist.getMediaById).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    '16498junk',
+    '+16498',
+    '-16498',
+    '16498.0',
+    '16498e2',
+    ' 16498',
+    '16498 ',
+    '16498\n',
+    '16498\r',
+    '16498\u2028',
+    '16498\u2029',
+    '0',
+    '2147483648',
+    '9'.repeat(100),
+  ])('rejects the complete invalid segment %j before service work', async (id) => {
+    await expect(
+      animeMediaResource.handler({ id }, createMockContext({ errors: animeMediaResource.errors })),
+    ).rejects.toMatchObject({ code: -32007, data: { reason: 'invalid_id' } });
+    expect(anilist.getMediaById).not.toHaveBeenCalled();
+  });
+
   it('returns full media record for a valid numeric string ID', async () => {
     vi.mocked(anilist.getMediaById).mockResolvedValue(mockDetail);
     vi.mocked(jikan.getMediaFull).mockResolvedValue(mockJikanFull);
     vi.mocked(kitsu.getAnimeStreamingByMalId).mockResolvedValue(mockKitsuStreaming);
 
-    const ctx = createMockContext({ tenantId: 'test-tenant' });
+    const ctx = createMockContext({ tenantId: 'test-tenant', errors: animeMediaResource.errors });
     const params = animeMediaResource.params!.parse({ id: '11757' });
     const result = await animeMediaResource.handler(params, ctx);
 
@@ -130,21 +233,21 @@ describe('animeMediaResource', () => {
 
     const result = await animeMediaResource.handler(
       animeMediaResource.params!.parse({ id: '11757' }),
-      createMockContext({ tenantId: 'test-tenant' }),
+      createMockContext({ tenantId: 'test-tenant', errors: animeMediaResource.errors }),
     );
 
     expect(result.description).toBe(description);
   });
 
   it('throws notFound for a non-numeric ID string', async () => {
-    const ctx = createMockContext({ tenantId: 'test-tenant' });
+    const ctx = createMockContext({ tenantId: 'test-tenant', errors: animeMediaResource.errors });
     const params = animeMediaResource.params!.parse({ id: 'not-a-number' });
 
     await expect(animeMediaResource.handler(params, ctx)).rejects.toThrow();
   });
 
   it('throws notFound when ID is zero or negative (invalid)', async () => {
-    const ctx = createMockContext({ tenantId: 'test-tenant' });
+    const ctx = createMockContext({ tenantId: 'test-tenant', errors: animeMediaResource.errors });
     const params = animeMediaResource.params!.parse({ id: '0' });
 
     await expect(animeMediaResource.handler(params, ctx)).rejects.toThrow();
@@ -153,7 +256,7 @@ describe('animeMediaResource', () => {
   it('throws notFound when AniList returns null for the ID', async () => {
     vi.mocked(anilist.getMediaById).mockResolvedValue(null);
 
-    const ctx = createMockContext({ tenantId: 'test-tenant' });
+    const ctx = createMockContext({ tenantId: 'test-tenant', errors: animeMediaResource.errors });
     const params = animeMediaResource.params!.parse({ id: '99999' });
 
     await expect(animeMediaResource.handler(params, ctx)).rejects.toThrow();
@@ -164,7 +267,7 @@ describe('animeMediaResource', () => {
     vi.mocked(jikan.getMediaFull).mockRejectedValue(new Error('Jikan down'));
     vi.mocked(kitsu.getAnimeStreamingByMalId).mockRejectedValue(new Error('Kitsu down'));
 
-    const ctx = createMockContext({ tenantId: 'test-tenant' });
+    const ctx = createMockContext({ tenantId: 'test-tenant', errors: animeMediaResource.errors });
     const params = animeMediaResource.params!.parse({ id: '11757' });
     const result = await animeMediaResource.handler(params, ctx);
 
@@ -179,7 +282,7 @@ describe('animeMediaResource', () => {
     vi.mocked(jikan.getMediaFull).mockResolvedValue(mockJikanFull);
     vi.mocked(kitsu.getAnimeStreamingByMalId).mockResolvedValue(mockKitsuStreaming);
 
-    const ctx = createMockContext({ tenantId: 'test-tenant' });
+    const ctx = createMockContext({ tenantId: 'test-tenant', errors: animeMediaResource.errors });
     const params = animeMediaResource.params!.parse({ id: '11757' });
     const result = await animeMediaResource.handler(params, ctx);
 
@@ -191,7 +294,7 @@ describe('animeMediaResource', () => {
     vi.mocked(anilist.getMediaById).mockResolvedValue(mangaDetail);
     vi.mocked(jikan.getMediaFull).mockResolvedValue(null);
 
-    const ctx = createMockContext({ tenantId: 'test-tenant' });
+    const ctx = createMockContext({ tenantId: 'test-tenant', errors: animeMediaResource.errors });
     const params = animeMediaResource.params!.parse({ id: '11757' });
     await animeMediaResource.handler(params, ctx);
 
@@ -220,7 +323,7 @@ describe('animeMediaResource', () => {
       streamingLinks: [],
     });
 
-    const ctx = createMockContext({ tenantId: 'test-tenant' });
+    const ctx = createMockContext({ tenantId: 'test-tenant', errors: animeMediaResource.errors });
     const params = animeMediaResource.params!.parse({ id: '11757' });
     const result = await animeMediaResource.handler(params, ctx);
 

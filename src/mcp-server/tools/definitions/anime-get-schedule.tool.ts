@@ -13,6 +13,7 @@ import {
   PAGE_DEPTH_EDGE_NOTICE,
   pastEndNotice,
 } from '@/services/anilist/pagination.js';
+import { summaryView } from '../render-text.js';
 
 const SeasonEnum = z
   .enum(['WINTER', 'SPRING', 'SUMMER', 'FALL'])
@@ -37,9 +38,9 @@ export const animeGetSchedule = tool('anime_get_schedule', {
         '"season": all anime from a specific season/year. Requires season and season_year. ' +
           '"upcoming": next airing episode for each currently-airing title within days_ahead window.',
       ),
-    season: SeasonEnum.optional().describe(
-      'Season to list. Required with mode "season"; rejected with mode "upcoming".',
-    ),
+    season: SeasonEnum.or(z.literal(''))
+      .optional()
+      .describe('Season to list. Required with mode "season"; rejected with mode "upcoming".'),
     season_year: z
       .number()
       .int()
@@ -298,6 +299,7 @@ export const animeGetSchedule = tool('anime_get_schedule', {
   },
 
   format: (result) => {
+    result = summaryView(result);
     const lines: string[] = [];
 
     if (result.mode === 'season') {

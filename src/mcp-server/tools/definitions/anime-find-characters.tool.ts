@@ -7,6 +7,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import * as anilist from '@/services/anilist/anilist-service.js';
+import { fullTextJson, summaryView } from '../render-text.js';
 
 const STAFF_LANGUAGE_VALUES = [
   'JAPANESE',
@@ -29,10 +30,17 @@ export const animeFindCharacters = tool('anime_find_characters', {
   annotations: { readOnlyHint: true, openWorldHint: true },
 
   input: z.object({
+    full_text: z
+      .boolean()
+      .default(false)
+      .describe(
+        'Render complete domain JSON in text, including full biography and every role on this page. Default false uses bounded summaries; upstream pagination is unchanged.',
+      ),
     id: z
       .number()
       .int()
       .min(1)
+      .max(2147483647)
       .optional()
       .describe(
         'AniList media ID for title → cast lookup. Use anime_search_media to find this ID. Send exactly one of id, character_name, or voice_actor_name.',
@@ -53,6 +61,8 @@ export const animeFindCharacters = tool('anime_find_characters', {
       ),
     language: z
       .enum(STAFF_LANGUAGE_VALUES)
+      .describe('AniList voice acting language.')
+      .or(z.literal(''))
       .optional()
       .describe(
         'Filter voice actors by language. Common: JAPANESE, ENGLISH, KOREAN. ' +
@@ -91,6 +101,7 @@ export const animeFindCharacters = tool('anime_find_characters', {
   },
 
   output: z.object({
+    full_text: z.boolean().describe('Whether text renders the complete domain result as JSON.'),
     mode: z
       .enum(['by_media', 'by_character', 'by_voice_actor'])
       .describe('Which lookup mode was used.'),
@@ -148,6 +159,11 @@ export const animeFindCharacters = tool('anime_find_characters', {
                   .describe('A voice actor for this character.'),
               )
               .describe('Voice actors for this character, filtered by language if requested.'),
+            voice_actor_data_available: z
+              .boolean()
+              .describe(
+                'False when the provider did not supply actor data; true for populated or genuinely empty lists.',
+              ),
           })
           .describe('A character entry with voice actor list.'),
       )
@@ -248,7 +264,7 @@ export const animeFindCharacters = tool('anime_find_characters', {
 
       const result = await anilist.getMediaCharacters({
         mediaId: input.id,
-        language: input.language,
+        language: input.language || undefined,
         page: input.page,
         perPage: input.per_page,
       });
@@ -268,6 +284,7 @@ export const animeFindCharacters = tool('anime_find_characters', {
       }
 
       return {
+        full_text: input.full_text,
         mode: 'by_media' as const,
         media_id: input.id,
         has_next_page: result.hasNextPage,
@@ -278,6 +295,7 @@ export const animeFindCharacters = tool('anime_find_characters', {
           role: edge.role,
           character_image_url: edge.node.image?.large ?? null,
           character_site_url: edge.node.siteUrl ?? null,
+          voice_actor_data_available: true,
           voice_actors: edge.voiceActors.map((va) => ({
             va_id: va.id,
             va_name: va.name.full,
@@ -303,19 +321,20 @@ export const animeFindCharacters = tool('anime_find_characters', {
 
       // Map each media appearance as a character entry so the agent can see
       // which titles the character appears in and their VAs per appearance.
-      const appearances = character.media.nodes.map((media, i) => {
-        const edge = character.media.edges[i];
+      const appearances = character.media.edges.map((edge) => {
+        const media = edge.node;
         return {
           character_id: character.id,
           character_name: character.name.full,
           character_name_native: character.name.native,
-          role: edge?.characterRole ?? 'SUPPORTING',
+          role: edge.characterRole,
           character_image_url: character.image?.large ?? null,
           character_site_url: character.siteUrl ?? null,
           media_id: media.id,
           media_title: media.title.romaji,
           media_format: media.format ?? null,
-          voice_actors: (edge?.voiceActors ?? []).map((va) => ({
+          voice_actor_data_available: edge.voiceActors !== null,
+          voice_actors: (edge.voiceActors ?? []).map((va) => ({
             va_id: va.id,
             va_name: va.name.full,
             va_name_native: va.name.native,
@@ -326,7 +345,7 @@ export const animeFindCharacters = tool('anime_find_characters', {
         };
       });
 
-      // If no appearances mapped (edge/node mismatch), fall back to single entry
+      // A character without appearances still returns their identity.
       const characters =
         appearances.length > 0
           ? appearances
@@ -342,10 +361,12 @@ export const animeFindCharacters = tool('anime_find_characters', {
                 media_title: null,
                 media_format: null,
                 voice_actors: [],
+                voice_actor_data_available: false,
               },
             ];
 
       return {
+        full_text: input.full_text,
         mode: 'by_character' as const,
         media_id: null,
         has_next_page: character.media.pageInfo.hasNextPage,
@@ -369,6 +390,7 @@ export const animeFindCharacters = tool('anime_find_characters', {
     }
 
     return {
+      full_text: input.full_text,
       mode: 'by_voice_actor' as const,
       media_id: null,
       has_next_page: staff.characterMedia.pageInfo.hasNextPage,
@@ -393,15 +415,31 @@ export const animeFindCharacters = tool('anime_find_characters', {
   },
 
   format: (result) => {
+    if (result.full_text) return [{ type: 'text', text: fullTextJson(result) }];
+    const mode = result.mode;
+    const omittedCharacters = Math.max(0, (result.voice_actor?.description?.length ?? 0) - 500);
+    const omittedRoles =
+      mode === 'by_voice_actor' ? Math.max(0, (result.voice_actor?.roles.length ?? 0) - 20) : 0;
+    result = summaryView({
+      ...result,
+      voice_actor: result.voice_actor
+        ? {
+            ...result.voice_actor,
+            description: result.voice_actor.description?.slice(0, 500) ?? null,
+          }
+        : null,
+    });
     const lines: string[] = [`mode: ${result.mode}`];
 
-    if (result.mode === 'by_media') {
+    if (mode === 'by_media') {
       lines.push(`## Characters [media AL:${result.media_id}]`, '');
       if (result.characters.length === 0) {
         lines.push('No characters found.');
-        return [{ type: 'text', text: lines.join('\n') }];
       }
       for (const c of result.characters) {
+        lines.push(
+          `voice_actor_data_available: ${c.voice_actor_data_available}${c.voice_actor_data_available ? '' : ' (unavailable)'}`,
+        );
         const mediaContext =
           c.media_id !== undefined || c.media_title !== undefined || c.media_format !== undefined
             ? ` | media_id:${c.media_id ?? 'none'} media_title:${c.media_title ?? 'none'} media_format:${c.media_format ?? 'none'}`
@@ -416,19 +454,22 @@ export const animeFindCharacters = tool('anime_find_characters', {
           );
         }
       }
-    } else if (result.mode === 'by_character') {
+    } else if (mode === 'by_character') {
       const first = result.characters[0];
       if (!first) {
         lines.push('No character found.');
-        return [{ type: 'text', text: lines.join('\n') }];
+      } else {
+        lines.push(
+          `## ${first.character_name ?? 'Unknown'} (${first.character_name_native ?? '?'}) [char_id:${first.character_id}]`,
+          `image: ${first.character_image_url ?? 'none'} | site: ${first.character_site_url ?? 'none'}`,
+          '',
+          `**Appears in ${result.characters.filter((entry) => entry.media_id !== undefined).length} title(s):**`,
+        );
       }
-      lines.push(
-        `## ${first.character_name ?? 'Unknown'} (${first.character_name_native ?? '?'}) [char_id:${first.character_id}]`,
-        `image: ${first.character_image_url ?? 'none'} | site: ${first.character_site_url ?? 'none'}`,
-        '',
-        `**Appears in ${result.characters.length} title(s):**`,
-      );
       for (const c of result.characters) {
+        lines.push(
+          `voice_actor_data_available: ${c.voice_actor_data_available}${c.voice_actor_data_available ? '' : ' (unavailable)'}`,
+        );
         lines.push(
           `  media_title:${c.media_title ?? 'Unknown title'} [AL:${c.media_id ?? '?'}] media_id:${c.media_id ?? 'none'} media_format:${c.media_format ?? 'none'} role:${c.role} char_id:${c.character_id}`,
         );
@@ -438,14 +479,14 @@ export const animeFindCharacters = tool('anime_find_characters', {
           );
         }
       }
-    } else if (result.mode === 'by_voice_actor') {
+    } else if (mode === 'by_voice_actor') {
       const va = result.voice_actor;
       if (va) {
         lines.push(
           `## ${va.va_name ?? 'Unknown'} (${va.va_name_native ?? '?'}) (VA)`,
           `va_id:${va.va_id} | va_name:${va.va_name ?? '?'} | va_name_native:${va.va_name_native ?? '?'} | language:${va.language ?? 'unknown'}`,
           `va_image_url:${va.va_image_url ?? 'none'} | va_site_url:${va.va_site_url ?? 'none'}`,
-          `description:${renderDescription(va.description)}`,
+          `description:${va.description ?? 'none'}${omittedCharacters > 0 ? '…' : ''}`,
           '',
           '**Roles:**',
         );
@@ -454,15 +495,15 @@ export const animeFindCharacters = tool('anime_find_characters', {
             `- character_name:${role.character_name ?? '?'} media_title:${role.media_title ?? 'Unknown'} character_role:${role.character_role} media_format:${role.media_format ?? '?'} [AL:${role.media_id}] media_id:${role.media_id}`,
           );
         }
-        if (va.roles.length > 20) lines.push(`_…and ${va.roles.length - 20} more_`);
+        if (omittedRoles > 0) lines.push(`${omittedRoles} roles omitted.`);
       }
     }
 
     // Render voice_actor fields when present (also catches synthetic linter samples)
-    if (result.mode !== 'by_voice_actor' && result.voice_actor) {
+    if (mode !== 'by_voice_actor' && result.voice_actor) {
       const va = result.voice_actor;
       lines.push(
-        `va_id:${va.va_id} va_name:${va.va_name ?? '?'} va_name_native:${va.va_name_native ?? '?'} language:${va.language ?? '?'} va_image_url:${va.va_image_url ?? 'none'} va_site_url:${va.va_site_url ?? 'none'} description:${renderDescription(va.description)}`,
+        `va_id:${va.va_id} va_name:${va.va_name ?? '?'} va_name_native:${va.va_name_native ?? '?'} language:${va.language ?? '?'} va_image_url:${va.va_image_url ?? 'none'} va_site_url:${va.va_site_url ?? 'none'} description:${va.description ?? 'none'}${omittedCharacters > 0 ? '…' : ''}`,
       );
       for (const role of va.roles) {
         lines.push(
@@ -472,12 +513,10 @@ export const animeFindCharacters = tool('anime_find_characters', {
     }
 
     if (result.has_next_page) lines.push('', '_More results on next page._');
+    lines.push(
+      `full_text: false · ${omittedCharacters} biography characters omitted · ${omittedRoles} roles omitted. Repeat the same input with full_text: true for the complete domain result on this page; use page to retrieve other pages.`,
+    );
 
     return [{ type: 'text', text: lines.filter((l) => l !== '').join('\n') }];
   },
 });
-
-function renderDescription(description: string | null): string {
-  if (description === null) return 'none';
-  return description.length > 500 ? `${description.slice(0, 500)}…` : description;
-}

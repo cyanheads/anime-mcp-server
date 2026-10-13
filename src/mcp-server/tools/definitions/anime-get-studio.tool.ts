@@ -8,6 +8,7 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import * as anilist from '@/services/anilist/anilist-service.js';
 import { pastEndNotice } from '@/services/anilist/pagination.js';
 import type { MediaNode, StudioMediaEdge } from '@/services/anilist/types.js';
+import { summaryView } from '../render-text.js';
 
 /**
  * One row per distinct title on the page, in first-credit order. AniList returns
@@ -44,12 +45,15 @@ export const animeGetStudio = tool('anime_get_studio', {
       .number()
       .int()
       .min(1)
+      .max(2147483647)
       .optional()
       .describe(
         'AniList studio ID for direct lookup. More precise than name search. Send either id or name, not both.',
       ),
     sort: z
       .enum(['POPULARITY_DESC', 'SCORE_DESC', 'START_DATE_DESC', 'START_DATE'])
+      .describe('AniList studio filmography sort field.')
+      .or(z.literal(''))
       .default('POPULARITY_DESC')
       .describe(
         'Sort order for the filmography. ' +
@@ -175,7 +179,7 @@ export const animeGetStudio = tool('anime_get_studio', {
       ctx.log.info('Fetching studio by ID', { id: input.id });
       studio = await anilist.getStudioById({
         id: input.id,
-        sort: input.sort,
+        sort: input.sort || 'POPULARITY_DESC',
         page: input.page,
         perPage: input.per_page,
       });
@@ -183,7 +187,7 @@ export const animeGetStudio = tool('anime_get_studio', {
       ctx.log.info('Searching studio by name', { name });
       studio = await anilist.searchStudio({
         name: name ?? '',
-        sort: input.sort,
+        sort: input.sort || 'POPULARITY_DESC',
         page: input.page,
         perPage: input.per_page,
       });
@@ -238,6 +242,7 @@ export const animeGetStudio = tool('anime_get_studio', {
   },
 
   format: (result) => {
+    result = summaryView(result);
     const lines: string[] = [
       `## ${result.studio_name} Filmography`,
       `AniList ID: ${result.studio_id}${result.is_animation_studio ? ' · Animation Studio' : ''} | studio_site_url: ${result.studio_site_url ?? 'none'}`,

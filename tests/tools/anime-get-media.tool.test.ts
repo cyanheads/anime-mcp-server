@@ -7,6 +7,7 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeGetMedia } from '@/mcp-server/tools/definitions/anime-get-media.tool.js';
+import { escapeProviderText } from '@/mcp-server/tools/render-text.js';
 import type { MediaDetail } from '@/services/anilist/types.js';
 import type { JikanMedia } from '@/services/jikan/types.js';
 import type { KitsuStreamingResult } from '@/services/kitsu/types.js';
@@ -293,7 +294,7 @@ describe('animeGetMedia', () => {
     const text = (animeGetMedia.format!(result)[0] as { text: string }).text;
 
     expect(result.description).toBe(description);
-    expect(text).toContain(`${description.slice(0, 500)}…`);
+    expect(text).toContain(`${escapeProviderText(description.slice(0, 500))}…`);
     expect(text).not.toContain(description);
   });
 

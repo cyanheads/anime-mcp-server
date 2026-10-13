@@ -7,6 +7,7 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeFindCharacters } from '@/mcp-server/tools/definitions/anime-find-characters.tool.js';
+import { escapeProviderText } from '@/mcp-server/tools/render-text.js';
 import type {
   CharacterEdge,
   CharacterWithMedia,
@@ -68,9 +69,9 @@ const mockCharacterWithMedia: CharacterWithMedia = {
   siteUrl: 'https://anilist.co/character/40882',
   media: {
     pageInfo: { hasNextPage: false, currentPage: 1 },
-    nodes: [mockMediaNode],
     edges: [
       {
+        node: mockMediaNode,
         characterRole: 'MAIN' as const,
         voiceActors: [
           {
@@ -123,6 +124,90 @@ const mockStaffWithRoles: StaffWithRoles = {
 describe('animeFindCharacters', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+  });
+
+  it('describes an identity-only character as zero appearances and preserves full-text retrieval', async () => {
+    vi.mocked(anilist.searchCharacter).mockResolvedValue({
+      ...mockCharacterWithMedia,
+      media: { pageInfo: { hasNextPage: false, currentPage: 1 }, edges: [] },
+    });
+    const result = await runToolContract(animeFindCharacters, {
+      character_name: 'Okabe',
+      language: '',
+    });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({
+      characters: [{ character_id: 40882, voice_actor_data_available: false }],
+    });
+    expect(JSON.stringify(result.content)).toContain('Appears in 0 title(s)');
+    expect(JSON.stringify(result.content)).toContain('full_text: true');
+  });
+
+  it.each([false, true])(
+    'full_text %s preserves empty cast and capped-page enrichment',
+    async (full_text) => {
+      for (const characters of [[], mockCharacterEdges.characters]) {
+        vi.mocked(anilist.getMediaCharacters).mockResolvedValue({ characters, hasNextPage: true });
+        const result = await runToolContract(animeFindCharacters, {
+          id: 11757,
+          per_page: 1,
+          page: 3,
+          full_text,
+        });
+        expect(result.isError).toBeFalsy();
+        expect(result.structuredContent).toMatchObject({
+          full_text,
+          characters: expect.any(Array),
+          has_next_page: true,
+          truncated: true,
+          shown: characters.length,
+          cap: 1,
+        });
+        expect(JSON.stringify(result.content)).toContain('page 4');
+        if (full_text) {
+          const domain = JSON.parse((result.content[0] as { text: string }).text.slice(8, -4));
+          expect(domain).toMatchObject({ full_text: true, has_next_page: true });
+          expect(domain).not.toHaveProperty('truncated');
+          expect(domain.characters).toHaveLength(characters.length);
+        } else {
+          expect(JSON.stringify(result.content)).toContain('full_text: true');
+        }
+        expect(anilist.getMediaCharacters).toHaveBeenLastCalledWith({
+          mediaId: 11757,
+          language: undefined,
+          page: 3,
+          perPage: 1,
+        });
+      }
+    },
+  );
+
+  it('maps reordered edge-owned appearances and distinguishes null actor data from an empty manga list', async () => {
+    const manga = { ...mockMediaNode, id: 2, type: 'MANGA' as const, format: 'MANGA' as const };
+    vi.mocked(anilist.searchCharacter).mockResolvedValue({
+      ...mockCharacterWithMedia,
+      media: {
+        pageInfo: { hasNextPage: true, currentPage: 2 },
+        edges: [
+          { node: manga, characterRole: 'SUPPORTING', voiceActors: [] },
+          { node: mockMediaNode, characterRole: 'MAIN', voiceActors: null },
+        ],
+      },
+    });
+    const result = await runToolContract(animeFindCharacters, {
+      character_name: 'Okabe',
+      page: 2,
+      per_page: 2,
+    });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({
+      has_next_page: true,
+      characters: [
+        { media_id: 2, role: 'SUPPORTING', voice_actors: [], voice_actor_data_available: true },
+        { media_id: 11757, role: 'MAIN', voice_actors: [], voice_actor_data_available: false },
+      ],
+    });
+    expect(JSON.stringify(result.content)).toContain('unavailable');
   });
 
   it('returns characters in by_media mode when id is provided', async () => {
@@ -195,8 +280,7 @@ describe('animeFindCharacters', () => {
       ...mockCharacterWithMedia,
       media: {
         pageInfo: { hasNextPage: false, currentPage: 2 },
-        nodes: [secondMedia],
-        edges: [{ characterRole: 'MAIN', voiceActors: [] }],
+        edges: [{ node: secondMedia, characterRole: 'MAIN', voiceActors: [] }],
       },
     });
     const ctx = createMockContext({ errors: animeFindCharacters.errors });
@@ -248,7 +332,7 @@ describe('animeFindCharacters', () => {
     const text = (animeFindCharacters.format!(result)[0] as { text: string }).text;
 
     expect(result.voice_actor?.description).toBe(description);
-    expect(text).toContain(`description:${description.slice(0, 500)}…`);
+    expect(text).toContain(`description:${escapeProviderText(description.slice(0, 500))}…`);
     expect(text).not.toContain(description);
   });
 

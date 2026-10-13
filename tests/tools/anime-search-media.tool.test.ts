@@ -104,6 +104,19 @@ describe('animeSearchMedia', () => {
     vi.resetAllMocks();
   });
 
+  it('escapes provider titles in summary text without changing structured titles', async () => {
+    const title = '*[title]*\r\n<script>';
+    vi.mocked(anilist.searchMedia).mockResolvedValue({
+      ...mockAnilistPage,
+      media: [{ ...steinsGate, title: { romaji: title, english: title, native: null } }],
+    });
+    const result = await runToolContract(animeSearchMedia, { media_type: 'ANIME', query: 'title' });
+    expect(result.structuredContent).toMatchObject({ results: [{ title_romaji: title }] });
+    expect(JSON.stringify(result.content)).toContain(
+      '&#42;&#91;title&#93;&#42;&#13;&#10;&#60;script&#62;',
+    );
+  });
+
   it('returns AniList results when AniList has matches', async () => {
     vi.mocked(anilist.searchMedia).mockResolvedValue(mockAnilistPage);
     const ctx = createMockContext({ errors: animeSearchMedia.errors });

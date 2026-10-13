@@ -1,6 +1,6 @@
 /**
- * @fileoverview anime_get_relations tool — franchise watch/read order via multi-hop relation graph traversal.
- * BFS over AniList relation edges up to max_depth, then topological sort for recommended order.
+ * @fileoverview anime_get_relations tool — depth-bounded franchise graph traversal.
+ * BFS discovery paths with relation-priority/year ordering, a heuristic rather than chronology.
  * @module mcp-server/tools/definitions/anime-get-relations.tool
  */
 
@@ -8,8 +8,9 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import * as anilist from '@/services/anilist/anilist-service.js';
 import type { MediaNode, MediaRelationEdge, MediaRelationType } from '@/services/anilist/types.js';
+import { summaryView } from '../render-text.js';
 
-/** Priority for topological watch-order sort. Lower = watch earlier. */
+/** Relation priority for the presentation heuristic. Lower sorts earlier. */
 const RELATION_ORDER: Record<string, number> = {
   SOURCE: 0,
   ADAPTATION: 1,
@@ -41,12 +42,17 @@ export const animeGetRelations = tool('anime_get_relations', {
   description:
     'Franchise untangler. Walks the related-works graph from a media ID across multiple hops — ' +
     'sequels, prequels, side stories, movies, OVAs, source/adaptation — and returns them ordered ' +
-    'into a suggested watch/read order. This is the "how do I watch this whole series" tool. ' +
+    'by a relation-priority/year heuristic, not a topological franchise chronology. ' +
     'Use anime_get_media first to confirm the ID.',
   annotations: { readOnlyHint: true, idempotentHint: true },
 
   input: z.object({
-    id: z.number().int().min(1).describe('AniList media ID of any entry in the franchise.'),
+    id: z
+      .number()
+      .int()
+      .min(1)
+      .max(2147483647)
+      .describe('AniList media ID of any entry in the franchise.'),
     max_depth: z
       .number()
       .int()
@@ -90,7 +96,23 @@ export const animeGetRelations = tool('anime_get_relations', {
             relation_to_root: z
               .string()
               .nullable()
-              .describe('How this entry relates to the root, or null for the root itself.'),
+              .describe('Direct root-edge relation only; null for the root and deeper entries.'),
+            depth: z
+              .number()
+              .int()
+              .describe('Hop count along the first shortest BFS discovery path.'),
+            parent_id: z
+              .number()
+              .int()
+              .nullable()
+              .describe('Discovery parent ID; null for the root.'),
+            relation_to_parent: z
+              .string()
+              .nullable()
+              .describe('Discovery parent edge relation; null for the root.'),
+            path: z
+              .array(z.number().int().describe('AniList media ID.'))
+              .describe('Root-to-entry IDs along the first shortest BFS path.'),
             watch_order_category: z
               .enum(['main', 'supplementary'])
               .describe(
@@ -130,6 +152,8 @@ export const animeGetRelations = tool('anime_get_relations', {
       node: MediaNode;
       relationType: MediaRelationType | null;
       depth: number;
+      parentId: number | null;
+      path: number[];
     };
 
     // `enqueued` prevents duplicate BFS queue entries. `visited` is the result map —
@@ -140,14 +164,14 @@ export const animeGetRelations = tool('anime_get_relations', {
     let maxDepthReached = 0;
 
     // BFS queue: items whose relations we still need to fetch
-    const toVisit: Array<{ id: number; depth: number }> = [{ id: input.id, depth: 0 }];
+    const toVisit: Array<{ id: number; depth: number; path: number[] }> = [
+      { id: input.id, depth: 0, path: [input.id] },
+    ];
 
     while (toVisit.length > 0) {
       const item = toVisit.shift();
       if (item === undefined) break;
-      if (item.depth > input.max_depth) continue;
-
-      maxDepthReached = Math.max(maxDepthReached, item.depth);
+      if (item.depth >= input.max_depth) continue;
 
       const edges: MediaRelationEdge[] | null = await anilist.getMediaRelations(item.id);
 
@@ -164,9 +188,11 @@ export const animeGetRelations = tool('anime_get_relations', {
           throw ctx.fail('not_found', `No media found with AniList ID ${input.id}`);
         }
         visited.set(input.id, {
-          node: rootMedia as unknown as MediaNode,
+          node: rootMedia,
           relationType: null,
           depth: 0,
+          parentId: null,
+          path: [input.id],
         });
       }
 
@@ -179,18 +205,25 @@ export const animeGetRelations = tool('anime_get_relations', {
             node: edge.node,
             relationType: edge.relationType,
             depth: item.depth + 1,
+            parentId: item.id,
+            path: [...item.path, childId],
           });
-          if (item.depth + 1 <= input.max_depth) {
-            toVisit.push({ id: childId, depth: item.depth + 1 });
+          maxDepthReached = Math.max(maxDepthReached, item.depth + 1);
+          if (item.depth + 1 < input.max_depth) {
+            toVisit.push({ id: childId, depth: item.depth + 1, path: [...item.path, childId] });
           }
         }
       }
     }
 
-    // Sort for watch order
+    // Presentation heuristic: main group first, then relation priority and year.
     const entries = Array.from(visited.values());
     ctx.enrich.total(visited.size);
     entries.sort((a, b) => {
+      const category =
+        Number(SUPPLEMENTARY_TYPES.has(a.relationType ?? '')) -
+        Number(SUPPLEMENTARY_TYPES.has(b.relationType ?? ''));
+      if (category !== 0) return category;
       const aPriority = RELATION_ORDER[a.relationType ?? 'OTHER'] ?? 11;
       const bPriority = RELATION_ORDER[b.relationType ?? 'OTHER'] ?? 11;
       if (aPriority !== bPriority) return aPriority - bPriority;
@@ -221,7 +254,11 @@ export const animeGetRelations = tool('anime_get_relations', {
         mean_score: e.node.meanScore ?? null,
         is_adult: e.node.isAdult,
         cover_image_url: e.node.coverImage?.large ?? null,
-        relation_to_root: e.relationType ?? null,
+        relation_to_root: e.depth === 1 ? e.relationType : null,
+        depth: e.depth,
+        parent_id: e.parentId,
+        relation_to_parent: e.relationType,
+        path: e.path,
         watch_order_category: (SUPPLEMENTARY_TYPES.has(e.relationType ?? '')
           ? 'supplementary'
           : 'main') as 'main' | 'supplementary',
@@ -231,17 +268,20 @@ export const animeGetRelations = tool('anime_get_relations', {
   },
 
   format: (result) => {
+    result = summaryView(result);
     const lines: string[] = [
-      `## Franchise Watch Order (root: AL:${result.root_id})`,
+      `## Franchise Relations (root: AL:${result.root_id})`,
+      'Relation-priority/year heuristic; not a topological chronology.',
       `${result.total_entries} entries · depth ${result.depth_reached}`,
       '',
     ];
+    lines.push(`watch_order_category: main / supplementary`);
 
     const main = result.entries.filter((e) => e.watch_order_category === 'main');
     const supplementary = result.entries.filter((e) => e.watch_order_category === 'supplementary');
 
     if (main.length) {
-      lines.push('**Main story order:**');
+      lines.push('**Main entries:**');
       for (let i = 0; i < main.length; i++) {
         const e = main[i];
         if (!e) continue;
@@ -265,7 +305,7 @@ export const animeGetRelations = tool('anime_get_relations', {
         const chap = e.chapters !== null ? ` chapters:${e.chapters}` : '';
         lines.push(
           `${i + 1}. **${title}** (${e.title ?? '?'}) [AL:${e.id}${malId}]${typeLabel}${fmt}${status}${score}${ep}${chap}${season}${seasonYear}${adult}${rel}`,
-          `   relation_to_root: ${e.relation_to_root ?? 'root'} | is_root: ${e.is_root} | is_adult: ${e.is_adult}${cover}`,
+          `   relation_to_root: ${e.relation_to_root ?? 'none'} | depth: ${e.depth} | parent_id: ${e.parent_id ?? 'none'} | relation_to_parent: ${e.relation_to_parent ?? 'none'} | path: ${e.path.join(' → ')} | is_root: ${e.is_root} | is_adult: ${e.is_adult}${cover}`,
         );
       }
     }
@@ -287,7 +327,7 @@ export const animeGetRelations = tool('anime_get_relations', {
         const chap = e.chapters !== null ? ` chapters:${e.chapters}` : '';
         lines.push(
           `- **${title}** (${e.title ?? '?'}) [AL:${e.id}${malId}]${typeLabel}${fmt}${status}${score}${chap}${season}${seasonYear}${adult}${rel}`,
-          `  relation_to_root: ${e.relation_to_root ?? '?'} | is_root: ${e.is_root} | is_adult: ${e.is_adult}${cover}`,
+          `  relation_to_root: ${e.relation_to_root ?? 'none'} | depth: ${e.depth} | parent_id: ${e.parent_id ?? 'none'} | relation_to_parent: ${e.relation_to_parent ?? 'none'} | path: ${e.path.join(' → ')} | is_root: ${e.is_root} | is_adult: ${e.is_adult}${cover}`,
         );
       }
     }

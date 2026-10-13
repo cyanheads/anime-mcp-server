@@ -7,6 +7,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import * as anilist from '@/services/anilist/anilist-service.js';
 import * as jikan from '@/services/jikan/jikan-service.js';
+import { summaryView } from '../render-text.js';
 
 export const animeGetRecommendations = tool('anime_get_recommendations', {
   description:
@@ -20,6 +21,7 @@ export const animeGetRecommendations = tool('anime_get_recommendations', {
       .number()
       .int()
       .min(1)
+      .max(2147483647)
       .describe('AniList media ID of the title to get recommendations for.'),
     liked_aspects: z
       .string()
@@ -209,6 +211,7 @@ export const animeGetRecommendations = tool('anime_get_recommendations', {
   },
 
   format: (result) => {
+    result = summaryView(result);
     const lines: string[] = [
       `## Recommendations for AL:${result.source_id}${result.source_id_mal ? ` / MAL:${result.source_id_mal}` : ''}`,
       `source_type: ${result.source_type ?? 'N/A'}`,

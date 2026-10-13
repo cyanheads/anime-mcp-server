@@ -73,6 +73,19 @@ describe('animeGetStudio', () => {
     vi.resetAllMocks();
   });
 
+  it('escapes provider studio names only in summaries', async () => {
+    const name = '*[studio]*\r\n<script>';
+    vi.mocked(anilist.searchStudio).mockResolvedValue({ ...mockStudioDetail, name });
+    const result = await runToolContract(animeGetStudio, { name: 'studio', sort: '' });
+    expect(result.structuredContent).toMatchObject({ studio_name: name });
+    expect(JSON.stringify(result.content)).toContain(
+      '&#42;&#91;studio&#93;&#42;&#13;&#10;&#60;script&#62;',
+    );
+    expect(anilist.searchStudio).toHaveBeenCalledWith(
+      expect.objectContaining({ sort: 'POPULARITY_DESC' }),
+    );
+  });
+
   it('returns studio filmography by name', async () => {
     vi.mocked(anilist.searchStudio).mockResolvedValue(mockStudioDetail);
     const ctx = createMockContext({ errors: animeGetStudio.errors });

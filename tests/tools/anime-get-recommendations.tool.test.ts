@@ -102,6 +102,29 @@ describe('animeGetRecommendations', () => {
     vi.resetAllMocks();
   });
 
+  it('escapes recommended provider titles only in summaries', async () => {
+    const title = '*[title]*\r\n<script>';
+    vi.mocked(anilist.getRecommendations).mockResolvedValue({
+      ...mockAnilistRecs,
+      nodes: mockAnilistRecs.nodes.map((node) => ({
+        ...node,
+        mediaRecommendation: node.mediaRecommendation
+          ? { ...node.mediaRecommendation, title: { romaji: title, english: title, native: null } }
+          : null,
+      })),
+    });
+    vi.mocked(anilist.getMediaById).mockResolvedValue({
+      ...sourceDetail,
+      title: { romaji: title, english: title, native: null },
+    });
+    vi.mocked(jikan.getRecommendations).mockResolvedValue([]);
+    const result = await runToolContract(animeGetRecommendations, { id: 11757 });
+    expect(result.structuredContent).toMatchObject({ recommendations: [{ title }] });
+    expect(JSON.stringify(result.content)).toContain(
+      '&#42;&#91;title&#93;&#42;&#13;&#10;&#60;script&#62;',
+    );
+  });
+
   it('returns merged recommendations from AniList and Jikan', async () => {
     vi.mocked(anilist.getRecommendations).mockResolvedValue(mockAnilistRecs);
     vi.mocked(anilist.getMediaById).mockResolvedValue(sourceDetail);

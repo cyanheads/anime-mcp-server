@@ -8,7 +8,7 @@
 |:-----|:------------|:-----------|:------------|
 | `anime_search_media` | Search anime or manga by title, genre, tag, season, year, format, or status; at least one criterion (or a sort other than `SEARCH_MATCH`) is required. Returns ranked results with IDs, titles, scores, format, and episode/chapter counts, and an exact result count only on the final page. AniList primary; optional Jikan fallback when AniList has no match for a title-only query. | `media_type` (`ANIME`\|`MANGA`), `query`, `genre`, `tag`, `season` (`WINTER`\|`SPRING`\|`SUMMER`\|`FALL`), `season_year`, `format` (AniList MediaFormat enum), `status` (AniList MediaStatus enum), `sort`, `page`, `per_page`, `include_adult` | `readOnlyHint: true`, `openWorldHint: true` |
 | `anime_get_media` | Full detail for one anime or manga by AniList ID. Returns synopsis, format, episode/chapter count, status, season, studios, source material, genres + tags (spoiler-flagged), AniList and MAL scores side by side, streaming links, cover/banner, and direct relations. Primary source for a title's complete profile. | `id`, `include_adult` | `readOnlyHint: true`, `idempotentHint: true` |
-| `anime_get_relations` | Franchise untangler. Walks the related-works graph from a media ID beyond one hop — sequels, prequels, side stories, movies, OVAs, source/adaptation — and returns them ordered into a suggested watch/read order. The "how do I watch this whole series" tool. | `id`, `max_depth` (int, 1–4) | `readOnlyHint: true`, `idempotentHint: true` |
+| `anime_get_relations` | Depth-bounded BFS relation graph with first shortest discovery paths, grouped as main/supplementary and ordered by relation priority then year. A presentation heuristic, not a topological chronology. | `id`, `max_depth` (int, 1–4) | `readOnlyHint: true`, `idempotentHint: true` |
 | `anime_get_schedule` | Airing schedule for a season or upcoming episode window. `season` mode: all anime airing in a given season/year, with an exact count only on the final page. `upcoming` mode: next episode for each airing title within a date window, with UTC timestamp and countdown. Each mode rejects the other mode's fields. | `mode` (`season`\|`upcoming`), `season` (`WINTER`\|`SPRING`\|`SUMMER`\|`FALL`) and `season_year` (season mode), `days_ahead` (upcoming mode, 1–30, 7 when omitted), `page`, `per_page` (max 50), `include_adult` | `readOnlyHint: true`, `openWorldHint: true` |
 | `anime_find_characters` | Characters and voice actors for a title, or look up a character/VA by name. Returns characters with their role (main/supporting/background), voice actors by language, and cross-links to other media. Exactly one identifier per call. | exactly one of `id` (media ID), `character_name`, `voice_actor_name`; `language` (AniList StaffLanguage enum: `JAPANESE`\|`ENGLISH`\|`KOREAN`\|etc., with `id` only), `page`, `per_page` | `readOnlyHint: true`, `openWorldHint: true` |
 | `anime_get_recommendations` | Recommendations for a title, merged from AniList and Jikan, with scores and vote counts. Optionally accepts what the user liked about the source title to contextualize picks. | `id`, `liked_aspects`, `page`, `per_page` | `readOnlyHint: true`, `idempotentHint: true` |
@@ -34,6 +34,7 @@
 | `anime_get_schedule` | `conflicting_inputs` | `ValidationError` | `mode: upcoming` with `season` or `season_year`, or `mode: season` with `days_ahead`; fails before any AniList call |
 | `anime_get_schedule` | `page_depth_exceeded` | `ValidationError` | `page × per_page` reaches past AniList's first 5,000 entries; thrown by `AniListService` |
 | `anime_get_rankings` | `invalid_season` | `ValidationError` | `mode: seasonal` with exactly one of `season` / `season_year`; fails before any AniList call |
+| `anime_get_rankings` | `anime_only_season` | `ValidationError` | MANGA with seasonal mode or a meaningful season/year filter; use MANGA top/trending without broadcast filters |
 | `anime_get_rankings` | `page_depth_exceeded` | `ValidationError` | `page × per_page` reaches past AniList's first 5,000 entries; thrown by `AniListService` |
 
 Baseline infra codes (`ServiceUnavailable`, `Timeout`, `ValidationError`, `InternalError`) bubble from any tool without needing declaration.
@@ -42,7 +43,9 @@ Baseline infra codes (`ServiceUnavailable`, `Timeout`, `ValidationError`, `Inter
 
 | URI Template | Description | Pagination |
 |:-------------|:------------|:-----------|
-| `anime://media/{id}` | Full media record by AniList ID — same data as `anime_get_media`. Stable URI for injectable context. | None (single item) |
+| `anime://media/{id}` | Compact media record: titles, full normalized synopsis, format/status/season, episode/chapter counts, genres, AniList/MAL scores, streaming count, cover and site URLs. Use `anime_get_media` for tags, studios, streaming links and relations. | None (single item) |
+
+Resource IDs must be complete SDK-parsed ASCII decimal segments representing 1–2147483647; leading zeros are accepted. `invalid_id` is a `ValidationError` before service work; a valid missing ID remains `not_found`. Transport URL normalization can strip literal tabs, newlines and trailing ASCII spaces before template matching; encoded whitespace and other nondecimal suffixes remain invalid.
 
 ### Prompts
 
@@ -64,14 +67,14 @@ Multi-source anime and manga server for fans who care about the details. The wor
 
 - Search anime and manga by multiple dimensions (title, genre, tag, season, year, format, status)
 - Full detail view including dual scores (AniList + MAL side by side — never blended)
-- Franchise watch-order via multi-hop relation graph traversal
+- Franchise relation graph with depth-bounded BFS and heuristic ordering
 - Seasonal airing schedule and upcoming episode countdown
 - Characters + voice actors, bidirectionally (title → cast, VA → roles)
 - Recommendations merged from AniList and Jikan
-- Top/trending/seasonal rankings filterable by genre, tag, and format
+- Top/trending rankings for anime/manga, with broadcast-season rankings and season/year filters restricted to anime
 - Studio filmography by name or ID
 - Adult content gated behind explicit `include_adult` opt-in (default: off)
-- Spoiler-safe by default — AniList spoiler-flagged tags returned with spoiler flag, relation descriptions sanitized unless opted in
+- Spoiler flags retained in structured output and full-text retrieval; default tag summaries omit spoiler/adult tags while bounded tag details retain their flags
 - All timestamps UTC; season labels echoed to avoid the winter/spring/summer/fall boundary footgun
 - No synthesized composite scores — surface real AniList and MAL scores separately
 
@@ -104,13 +107,13 @@ No `server-config.ts` needed — zero required env vars. Rate limit handling is 
 1. **Services** — `AniListService` (GraphQL client with retry + rate-limit backoff), `JikanService` (REST client, ~300ms between calls), `KitsuService` (JSON:API client)
 2. **`anime_search_media`** — AniList Page query + optional Jikan fallback (title-only queries with no AniList match, settled with `Promise.allSettled`); establish the base search + output shape
 3. **`anime_get_media`** — flagship: AniList full-detail query + Jikan score supplement + Kitsu streaming links fan-out
-4. **`anime_get_relations`** — multi-hop BFS/DFS over AniList relation graph; watch-order sort
+4. **`anime_get_relations`** — depth-bounded BFS over AniList relation graph; relation-priority/year presentation heuristic
 5. **`anime_get_schedule`** — AniList `AiringSchedule` query (single-item) + `Page(media(...))` for season mode
 6. **`anime_find_characters`** — AniList `Media.characters` + `Staff` lookup
 7. **`anime_get_recommendations`** — AniList `Media.recommendations.nodes` + Jikan `/{media_type}/{idMal}/recommendations` merge
 8. **`anime_get_rankings`** — AniList `Page(media(sort:...))` with mode dispatch
 9. **`anime_get_studio`** — AniList `Studio(...)` query with `media` edges (`isMainStudio` + node), deduplicated per page
-10. **`anime://media/{id}` resource** — delegates to `anime_get_media` handler
+10. **`anime://media/{id}` resource** — compact projection over the same media services, with complete decimal-segment validation
 11. Tests for each tool + service
 12. Devcheck pass
 
@@ -194,9 +197,9 @@ Calls 2 and 3 run in parallel via `Promise.allSettled`. Result always includes p
 |:--|:-----|:--------|
 | 1 | AniList `Media(id)` with `relations.edges` | Fetch direct relations (SEQUEL, PREQUEL, SIDE_STORY, SPIN_OFF, ALTERNATIVE, SOURCE, ADAPTATION, etc.) |
 | 2–N | AniList `Media(id)` for each related node | Walk transitive hops up to `max_depth` (default 2; cap at 4 to avoid runaway queries) |
-| Final | Topological sort | Order by relation type priority: SOURCE → PREQUEL → MAIN STORY → SEQUEL → SIDE_STORY → SPIN_OFF → OVA/SPECIAL → MOVIE |
+| Final | Presentation heuristic | Main group first, then supplementary; within each group, relation priority then season year |
 
-**Watch-order sort logic:** SOURCE/ADAPTATION relationships determine adaptation chain. PREQUEL → entry target → SEQUEL chains map the canonical order. SIDE_STORY, SPIN_OFF, OVA entries annotated as optional/supplementary. Result includes each entry's `seasonYear` and `episodes` for context.
+**BFS paths and ordering:** Admit only entries within `max_depth`; boundary entries are returned without fetching their relations. The first BFS discovery supplies `depth`, nullable `parent_id`, nullable `relation_to_parent`, and root-to-entry `path`. Cycles/shared descendants return once. `relation_to_root` describes only a direct root edge and is null for root/deeper entries. `depth_reached` is the largest returned depth, zero for an isolated root. Relation priority and year help browse the graph; they do not establish franchise chronology.
 
 ### `anime_find_characters` — bidirectional character/VA lookup
 
@@ -231,7 +234,7 @@ Both calls parallel via `Promise.allSettled`. Items deduped by ID; AniList ratin
 
 **`anime_get_studio` as a dedicated tool.** Could be a filter on `anime_search_media`. Kept separate because the workflow is different (completionist filmography, not a discovery page), the result shape is a curated sorted filmography (not a search result), and the output carries studio metadata (studio name, ID) not present in search results.
 
-**`anime_get_relations` max_depth cap at 4.** Uncapped BFS on a franchise like Gundam (50+ entries) would generate dozens of AniList requests. Default depth 2 covers 90% of use cases; max 4 covers long multi-sequel chains without runaway. Each hop is a separate GraphQL query — depth 4 on a branching franchise could mean ~15 queries. Rate limit awareness required.
+**`anime_get_relations` max_depth cap at 4.** Default depth 2 and maximum 4 bound the traversed hops. Branching still determines request count; only nodes below the boundary have relations fetched. AniList pacing applies to every request.
 
 **No `anime_get_character` / `anime_get_va` as separate tools.** `anime_find_characters` handles both "title → cast" and "name → roles" via parameter branching. A dedicated character-detail tool would mostly duplicate what character search returns; deferred unless field-testing reveals demand.
 
@@ -253,7 +256,13 @@ Both calls parallel via `Promise.allSettled`. Items deduped by ID; AniList ratin
 
 **Jikan 500 on invalid ID is an upstream proxy issue, not a server error.** When MAL returns an unexpected status for a nonexistent ID, Jikan raises a 500 UpstreamException. Service must treat HTTP 5xx on both `/anime/{id}` and `/manga/{id}` lookups as "not found or MAL unavailable" and fail gracefully (null MAL data), not surface as `ServiceUnavailable`.
 
-**Spoiler-safe default.** AniList tags carry `isGeneralSpoiler`. Relations include description fields that often contain spoilers. Default behavior: return spoiler tags with a `spoiler: true` flag (agent can decide whether to show), relation descriptions omitted unless `reveal_spoilers: true`. This respects the watching experience without hiding the data.
+**Bounded summaries with complete retrieval.** Media and character tools expose `full_text` (default false), echoed in domain output. Default descriptions retain the first 500 normalized source characters plus ellipsis, media tag/relation details retain five items, and staff role details retain twenty. Exact omitted character/item counts point to the same input with `full_text: true`, which renders complete domain JSON without advancing pagination. Enrichment stays in its existing trailing block. Provider strings are escaped only at rendering, after preview slicing; JSON backticks use Unicode escapes so provider text cannot close the fence. Structured terminal values stay canonical. The default tag summary hides spoiler/adult tags, while the first five tag details and full retrieval retain their flags.
+
+**Character appearances are edge-owned.** Character-name queries select only `media.edges`, pairing each node with its role and nullable actor list. `voice_actor_data_available` is false for null provider lists and true for populated or genuinely empty lists, so unavailable actors are not presented as a known empty cast. Page/per-page and upstream `hasNextPage` stay unchanged.
+
+**Input boundaries reflect upstream contracts.** The five AniList ID inputs require positive integers at most 2147483647. Optional enums accept only exact `""` as an absent form value; whitespace and unsupported strings remain invalid. Search sort drops blank items before criterion checks and retains omitted-sort behavior when none remain; studio blank sort uses `POPULARITY_DESC`. Required mode/media-type values remain required. MANGA seasonal mode and meaningful season/year ranking filters fail locally as `anime_only_season`.
+
+**Upcoming schedules sort before pagination.** AniList receives `sort: [TIME]` on `airingSchedules`, so page selection follows nondecreasing airing time, including ties. Local adult filtering retains upstream `hasNextPage`, even on fully hidden pages, without backfill.
 
 ---
 

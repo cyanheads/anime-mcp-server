@@ -55,6 +55,38 @@ const anilistCalls = () => http.calls.filter((call) => call.request.url === ANIL
 const jikanCalls = () => http.calls.filter((call) => JIKAN.test(call.request.url));
 
 describe('anime_search_media over the wire', () => {
+  it.each<{ sort: Array<'' | 'SCORE_DESC'> }>([{ sort: ['', 'SCORE_DESC'] }, { sort: [''] }])(
+    'normalizes blank enum values before upstream selection: %j',
+    async ({ sort }) => {
+      http.route({
+        method: 'POST',
+        match: ANILIST,
+        respond: Response.json({
+          data: {
+            Page: {
+              pageInfo: { currentPage: 1, hasNextPage: false, perPage: 1 },
+              media: [mediaNode(1)],
+            },
+          },
+        }),
+      });
+      const result = await runToolContract(animeSearchMedia, {
+        media_type: 'ANIME',
+        query: 'title',
+        season: '',
+        format: '',
+        status: '',
+        sort,
+      });
+      expect(result.isError).toBeFalsy();
+      const variables = await variablesOf(anilistCalls()[0]!.request);
+      expect(variables.sort).toEqual(
+        sort.includes('SCORE_DESC') ? ['SCORE_DESC'] : ['SEARCH_MATCH'],
+      );
+      for (const field of ['season', 'format', 'status'])
+        expect(variables).not.toHaveProperty(field);
+    },
+  );
   it('surfaces the AniList page-depth refusal as page_depth_exceeded with its recovery', async () => {
     http.route({
       method: 'POST',

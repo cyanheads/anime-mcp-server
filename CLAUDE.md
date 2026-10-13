@@ -2,9 +2,9 @@
 
 **Server:** anime-mcp-server
 **Version:** 0.2.1
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.13`
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.15`
 **Engines:** Bun ≥1.4.0, Node ≥24.0.0
-**MCP SDK:** `@modelcontextprotocol/server` ^2.2.0
+**MCP SDK:** `@modelcontextprotocol/server` ^2.3.1
 **Zod:** ^4.6.5
 
 > **Read the framework docs first:** `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` contains the full API reference — builders, Context, error codes, exports, patterns. This file covers server-specific conventions only.
@@ -37,6 +37,7 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 - **Use `ctx.state`** for tenant-scoped storage. Values round-trip as JSON on every provider: Dates read as ISO strings and returned objects never share identity. Never access persistence directly.
 - **Need input the caller didn't supply?** `return ctx.requestInput(...)` and read `ctx.inputs` when the handler is re-entered. Never `await` for user input mid-handler.
 - **Secrets in env vars only** — never hardcoded.
+- **Cut noise.** Add only what earns its place: no speculative generality, no guards for states the framework already prevents (Zod-validated params, classified errors), no abstraction until a third caller proves it, no option nothing sets.
 - **Close the loop on issues.** When implementing work tracked by a GitHub issue, comment on the issue with what landed and close it. Do both — a comment without a close leaves stale issues open; a close without a comment leaves no record of what shipped. The comment is for future readers — state the concrete changes, not the conversation that produced them.
 
 ---
@@ -50,7 +51,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import * as anilist from '@/services/anilist/anilist-service.js';
 
 export const animeGetRankings = tool('anime_get_rankings', {
-  description: 'Top, trending, or seasonal rankings for anime or manga.',
+  description: 'Top/trending rankings for anime or manga; seasonal rankings apply only to anime.',
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
     mode: z.enum(['top', 'trending', 'seasonal']).describe('Ranking mode.'),
@@ -67,8 +68,8 @@ export const animeGetRankings = tool('anime_get_rankings', {
   }),
   async handler(input, ctx) {
     ctx.log.info('Fetching rankings', { mode: input.mode });
-    const media = await anilist.getRankings(input.mode, input.media_type, input.page, input.per_page);
-    return { media };
+    const page = await anilist.getRankings({ mode: input.mode, mediaType: input.media_type, page: input.page, perPage: input.per_page });
+    return { media: page.media.map((media) => ({ id: media.id, title: media.title.romaji ?? 'Unknown', mean_score: media.meanScore ?? null })) };
   },
   format: (result) => [{
     type: 'text',
@@ -81,27 +82,31 @@ export const animeGetRankings = tool('anime_get_rankings', {
 
 ```ts
 import { resource, z } from '@cyanheads/mcp-ts-core';
-import { notFound } from '@cyanheads/mcp-ts-core/errors';
+import { notFound, validationError } from '@cyanheads/mcp-ts-core/errors';
 import * as anilist from '@/services/anilist/anilist-service.js';
 
 export const animeMediaResource = resource('anime://media/{id}', {
   name: 'anime-media',
-  description: 'Full media record for an anime or manga by AniList ID.',
+  description: 'Compact media context for an anime or manga by AniList ID.',
   mimeType: 'application/json',
   params: z.object({
     id: z.string().describe('AniList media ID as a string. Obtain from anime_search_media.'),
   }),
   async handler(params, ctx) {
-    const numericId = parseInt(params.id, 10);
-    if (isNaN(numericId) || numericId < 1) throw notFound(`Invalid AniList media ID: ${params.id}`);
+    const numericId = Number(params.id);
+    if (!/^[0-9]+(?![\s\S])/.test(params.id) || numericId < 1 || numericId > 2147483647) {
+      throw validationError('Use ASCII decimal digits representing an AniList ID from 1 to 2147483647.');
+    }
     const detail = await anilist.getMediaById(numericId);
     if (!detail) throw notFound(`No media found with AniList ID ${numericId}`, { id: numericId });
-    return detail;
+    return { id: detail.id, title: detail.title, description: detail.description };
   },
 });
 ```
 
 ### Server instructions
+
+`anime_get_media` and `anime_find_characters` expose `full_text` (default false): complete domain JSON in safely fenced text, with enrichment in its separate trailing block. Default summaries slice normalized descriptions to 500 source characters before escaping provider text and disclose exact omissions. Relation results use depth-bounded BFS paths and a relation-priority/year heuristic; `relation_to_root` describes only a direct root edge. MANGA rankings reject broadcast seasons. IDs are bounded to GraphQL Int, and exact blank optional enum values are absent.
 
 `createApp({ instructions })` set in `src/index.ts` — orients clients: discovery workflow (search → get), dual-score policy, adult content opt-in, rate limit notes. No `server-config.ts` — all three upstream sources (AniList, Jikan, Kitsu) are keyless; no server-specific env vars.
 
@@ -366,7 +371,7 @@ import { getMyService } from '@/services/my-domain/my-service.js';
 - [ ] If wrapping external API: tests include at least one sparse payload case with omitted upstream fields
 - [ ] Registered in `createApp()` arrays (directly or via barrel exports)
 - [ ] Tests use `createMockContext()` from `@cyanheads/mcp-ts-core/testing`
-- [ ] `.codex-plugin/plugin.json` populated — `name`, `version`, `description`, `repository`, `license` from `package.json`; `interface.displayName` = unscoped repo name; `interface.shortDescription` from `package.json` description
-- [ ] `.codex-plugin/mcp.json` updated — server name key is the unscoped repo name; env vars added for any required API keys
-- [ ] `.claude-plugin/plugin.json` populated — `name`, `version`, `description`, `repository`, `license` from `package.json`; inline `mcpServers` entry keyed by the unscoped repo name, env vars for any required API keys
+- [ ] `.codex-plugin/plugin.json` populated — `name`, `version`, `description`, `repository`, `license` from `package.json`; `interface.displayName` = the unscoped repo name (never the npm scope — `lint:packaging` enforces this); `interface.shortDescription` from `package.json` description
+- [ ] `.codex-plugin/mcp.json` updated — server name key is the unscoped repo name; every user-supplied variable (API key, contact email, instance URL) is listed in `env_vars` so Codex forwards it from the user's environment. Never write `"KEY": ""` into `env` — an empty value replaces the user's exported key and is read as unset
+- [ ] `.claude-plugin/plugin.json` populated — `name`, `version`, `description`, `author`, `repository`, `license`, `keywords` from `package.json`; inline `mcpServers` entry keyed by the unscoped repo name. Every user-supplied variable is declared under `userConfig` (`type`, `title`, `description`; `sensitive: true` for keys and tokens; `required: true` or `default: ""`) and referenced from `env` as `"KEY": "${user_config.<option>}"` — mirror the `user_config` block in `manifest.json`. Never write `"KEY": ""` into `env`
 - [ ] `npm run devcheck` passes

@@ -227,10 +227,10 @@ export interface CharacterWithMedia {
   image: { large: string | null; medium: string | null } | null;
   media: {
     pageInfo: { hasNextPage: boolean; currentPage: number };
-    nodes: MediaNode[];
     edges: Array<{
+      node: MediaNode;
       characterRole: CharacterRole;
-      voiceActors: VoiceActor[];
+      voiceActors: VoiceActor[] | null;
     }>;
   };
   name: { full: string | null; native: string | null };

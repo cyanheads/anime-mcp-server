@@ -7,7 +7,7 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeGetRelations } from '@/mcp-server/tools/definitions/anime-get-relations.tool.js';
-import type { MediaNode, MediaRelationEdge } from '@/services/anilist/types.js';
+import type { MediaDetail, MediaNode, MediaRelationEdge } from '@/services/anilist/types.js';
 
 vi.mock('@/services/anilist/anilist-service.js');
 
@@ -57,6 +57,85 @@ const sequelEdges: MediaRelationEdge[] = [{ relationType: 'SEQUEL', node: sequel
 describe('animeGetRelations', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+  });
+
+  it('escapes provider titles only in summaries and preserves isolated-root metadata', async () => {
+    const title = '*[title]*\r\n<script>';
+    vi.mocked(anilist.getMediaRelations).mockResolvedValue([]);
+    vi.mocked(anilist.getMediaById).mockResolvedValue({
+      ...rootNode,
+      title: { romaji: title, english: title, native: null },
+    } as MediaDetail);
+    const result = await runToolContract(animeGetRelations, { id: 11757 });
+    expect(result.structuredContent).toMatchObject({
+      depth_reached: 0,
+      entries: [{ title, parent_id: null, path: [11757] }],
+    });
+    expect(JSON.stringify(result.content)).toContain(
+      '&#42;&#91;title&#93;&#42;&#13;&#10;&#60;script&#62;',
+    );
+  });
+
+  it('never fetches boundary nodes or admits grandchildren beyond the requested depth', async () => {
+    vi.mocked(anilist.getMediaById).mockResolvedValue(rootNode as any);
+    vi.mocked(anilist.getMediaRelations).mockImplementation(async (id) =>
+      id === rootNode.id
+        ? sequelEdges
+        : [{ relationType: 'SEQUEL', node: { ...sequelNode, id: 3 } }],
+    );
+    const result = await runToolContract(animeGetRelations, { id: rootNode.id, max_depth: 1 });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({ depth_reached: 1, total_entries: 2 });
+    expect(anilist.getMediaRelations).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains first shortest BFS paths through cycles and shared descendants', async () => {
+    vi.mocked(anilist.getMediaById).mockResolvedValue(rootNode as any);
+    const graph = new Map<number, MediaRelationEdge[]>([
+      [
+        11757,
+        [
+          { relationType: 'SEQUEL', node: sequelNode },
+          { relationType: 'SIDE_STORY', node: { ...sequelNode, id: 2 } },
+        ],
+      ],
+      [
+        14247,
+        [
+          { relationType: 'SEQUEL', node: { ...sequelNode, id: 3 } },
+          { relationType: 'PREQUEL', node: rootNode },
+        ],
+      ],
+      [2, [{ relationType: 'OTHER', node: { ...sequelNode, id: 3 } }]],
+      [3, [{ relationType: 'SEQUEL', node: { ...sequelNode, id: 4 } }]],
+    ]);
+    vi.mocked(anilist.getMediaRelations).mockImplementation(async (id) => graph.get(id) ?? []);
+    const result = await animeGetRelations.handler(
+      animeGetRelations.input.parse({ id: 11757, max_depth: 3 }),
+      createMockContext({ errors: animeGetRelations.errors }),
+    );
+    expect(result.entries.find((entry) => entry.id === 3)).toMatchObject({
+      depth: 2,
+      parent_id: 14247,
+      relation_to_parent: 'SEQUEL',
+      relation_to_root: null,
+      path: [11757, 14247, 3],
+    });
+    expect(result.entries.find((entry) => entry.id === 4)).toMatchObject({
+      depth: 3,
+      parent_id: 3,
+      path: [11757, 14247, 3, 4],
+    });
+    expect(result.entries.find((entry) => entry.is_root)).toMatchObject({
+      depth: 0,
+      parent_id: null,
+      relation_to_parent: null,
+      relation_to_root: null,
+      path: [11757],
+    });
+    expect(result.total_entries).toBe(5);
+    expect(anilist.getMediaRelations).not.toHaveBeenCalledWith(4);
+    expect(JSON.stringify(animeGetRelations.format!(result))).toContain('11757 → 14247 → 3');
   });
 
   it('returns the root entry plus direct relations for depth 1', async () => {

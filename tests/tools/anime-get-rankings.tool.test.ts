@@ -7,6 +7,7 @@ import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeGetRankings } from '@/mcp-server/tools/definitions/anime-get-rankings.tool.js';
+import { escapeProviderText } from '@/mcp-server/tools/render-text.js';
 import {
   PAGE_DEPTH_EDGE_NOTICE,
   PAGE_DEPTH_RECOVERY,
@@ -48,6 +49,22 @@ const mockPage: MediaPage = {
 describe('animeGetRankings', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+  });
+
+  it('escapes provider titles only in summaries', async () => {
+    const title = '*[title]*\r\n<script>';
+    vi.mocked(anilist.getRankings).mockResolvedValue({
+      ...mockPage,
+      media: mockPage.media.map((media) => ({
+        ...media,
+        title: { romaji: title, english: title, native: null },
+      })),
+    });
+    const result = await runToolContract(animeGetRankings, { media_type: 'ANIME', mode: 'top' });
+    expect(result.structuredContent).toMatchObject({ entries: [{ title }] });
+    expect(JSON.stringify(result.content)).toContain(
+      '&#42;&#91;title&#93;&#42;&#13;&#10;&#60;script&#62;',
+    );
   });
 
   it('returns top rankings with rank positions starting from 1', async () => {
@@ -364,7 +381,7 @@ describe('animeGetRankings filters and contracts', () => {
       const text = contentText(result);
       expect(text).not.toContain('All-Time Top');
       expect(text).not.toContain('season_label: none');
-      expect(text).toContain(`## Top ANIME · ${label}`);
+      expect(text).toContain(`## Top ANIME · ${escapeProviderText(label)}`);
     });
 
     it('trending mode labels a season filter', async () => {

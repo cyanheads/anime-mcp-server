@@ -18,6 +18,7 @@ import {
 } from '@/services/anilist/pagination.js';
 import type { MediaNode, MediaType } from '@/services/anilist/types.js';
 import * as jikan from '@/services/jikan/jikan-service.js';
+import { summaryView } from '../render-text.js';
 
 const MediaTypeEnum = z.enum(['ANIME', 'MANGA']).describe('Media type to search: anime or manga.');
 const SeasonEnum = z
@@ -113,7 +114,9 @@ export const animeSearchMedia = tool('anime_search_media', {
       .describe(
         'AniList tag filter, e.g. "Isekai", "School", "Time Manipulation". Genres such as "Action" are not tags. Trimmed; blank counts as absent.',
       ),
-    season: SeasonEnum.optional(),
+    season: SeasonEnum.or(z.literal(''))
+      .optional()
+      .describe('Broadcast season filter; exact blank counts as absent.'),
     season_year: z
       .number()
       .int()
@@ -123,10 +126,14 @@ export const animeSearchMedia = tool('anime_search_media', {
       .describe(
         '4-digit year of the broadcast season, e.g. 2024. Without it, season matches that season in every year.',
       ),
-    format: FormatEnum.optional(),
-    status: StatusEnum.optional(),
+    format: FormatEnum.or(z.literal(''))
+      .optional()
+      .describe('Format filter; exact blank counts as absent.'),
+    status: StatusEnum.or(z.literal(''))
+      .optional()
+      .describe('Production status filter; exact blank counts as absent.'),
     sort: z
-      .array(SortEnum)
+      .array(SortEnum.or(z.literal('')).describe('Sort field; exact blank items are dropped.'))
       .max(5)
       .optional()
       .describe(
@@ -250,7 +257,8 @@ export const animeSearchMedia = tool('anime_search_media', {
     const query = present(input.query);
     const genre = present(input.genre);
     const tag = present(input.tag);
-    const sort = input.sort?.length ? input.sort : undefined;
+    const sorts = input.sort?.filter((value) => value !== '');
+    const sort = sorts?.length ? sorts : undefined;
 
     const filters: string[] = [];
     if (genre) filters.push(`genre="${genre}"`);
@@ -278,10 +286,10 @@ export const animeSearchMedia = tool('anime_search_media', {
       query,
       genre,
       tag,
-      season: input.season,
+      season: input.season || undefined,
       seasonYear: input.season_year,
-      format: input.format,
-      status: input.status,
+      format: input.format || undefined,
+      status: input.status || undefined,
       includeAdult: input.include_adult,
     };
     const anilistPage = await anilist.searchMedia({
@@ -397,6 +405,7 @@ export const animeSearchMedia = tool('anime_search_media', {
   },
 
   format: (result) => {
+    result = summaryView(result);
     if (result.results.length === 0) {
       return [
         { type: 'text', text: `No results found (source: ${result.source}, page ${result.page}).` },

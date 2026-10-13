@@ -83,6 +83,23 @@ describe('animeGetSchedule', () => {
     vi.resetAllMocks();
   });
 
+  it('escapes provider titles only in summaries', async () => {
+    const title = '*[title]*\r\n<script>';
+    vi.mocked(anilist.getSeasonSchedule).mockResolvedValue({
+      ...mockSeasonPage,
+      media: [{ ...mockMediaNode, title: { romaji: title, english: title, native: null } }],
+    });
+    const result = await runToolContract(animeGetSchedule, {
+      mode: 'season',
+      season: 'FALL',
+      season_year: 2024,
+    });
+    expect(result.structuredContent).toMatchObject({ entries: [{ title }] });
+    expect(JSON.stringify(result.content)).toContain(
+      '&#42;&#91;title&#93;&#42;&#13;&#10;&#60;script&#62;',
+    );
+  });
+
   it('returns season schedule when mode is "season" with valid params', async () => {
     vi.mocked(anilist.getSeasonSchedule).mockResolvedValue(mockSeasonPage);
     const ctx = createMockContext({ errors: animeGetSchedule.errors });
