@@ -23,7 +23,7 @@
 
 ## Overview
 
-Anime and manga data from AniList, Jikan (MyAnimeList), and Kitsu. Search titles, pull full detail with side-by-side AniList and MAL scores, walk a franchise's relation graph, check the airing schedule, and look up characters, voice actors, and studio filmographies from any MCP client. Runs as a stdio process or a local Streamable HTTP server.
+Anime and manga data from AniList, Jikan (MyAnimeList), and Kitsu. Search titles, pull full detail with side-by-side AniList and MAL scores, walk a franchise's relation graph, check the airing schedule, and look up characters, voice actors, and studio filmographies.
 
 ### Tools
 
@@ -31,7 +31,7 @@ Anime and manga data from AniList, Jikan (MyAnimeList), and Kitsu. Search titles
 |:---|:---|
 | `anime_search_media` | Search anime or manga by title, genre, tag, season, year, format, or status. Returns ranked results with IDs, titles, scores, format, and episode/chapter counts. AniList primary; Jikan (MAL) fallback when AniList has no match for a title-only query. |
 | `anime_get_media` | Full detail for one anime or manga by AniList ID — synopsis, format, episode/chapter count, status, season, studios, source material, genres and tags (spoiler-flagged), AniList and MAL scores side by side, streaming links, cover/banner, and direct relations. |
-| `anime_get_relations` | Walks the related-works graph within a hop limit, preserving BFS discovery paths. Groups main and supplementary entries using a relation-priority/year heuristic, not a topological chronology. |
+| `anime_get_relations` | Walks the related-works graph within a hop limit. Groups main and supplementary entries by relation priority, then year; not a strict chronology. |
 | `anime_get_schedule` | Airing schedule for a season or upcoming episode window. Season mode lists all anime airing in a given season/year. Upcoming mode returns the next episode for each airing title within a date window, with UTC timestamp and countdown. |
 | `anime_find_characters` | Characters and voice actors for a title, or look up a character/VA by name. Returns characters with role (main/supporting/background), voice actors by language, and cross-links to other media. |
 | `anime_get_recommendations` | AniList recommendations with matching Jikan (MAL) vote counts. Optionally echoes what the user liked about the source title to contextualize picks. |
@@ -54,6 +54,7 @@ All resource data is also reachable via tools. Use `anime_search_media` to disco
 
 - Search anime or manga by title, genre, tag, season/year, format, status, or up to 5 sort values; at least one criterion is required. `page`/`per_page` pages results (max 50), and `include_adult: true` opts into adult titles
 - Results carry AniList IDs, titles, scores, and episode/chapter counts. AniList is primary; title-only searches with no match can fall back to Jikan at `per_page` 25 or less. Follow `has_next_page`; `total_results` is exact only on the final page
+- AniList serves only the first 5,000 search, season, and ranking entries; deeper pages fail with `page_depth_exceeded`, so narrow the criteria instead
 
 ---
 
@@ -61,7 +62,7 @@ All resource data is also reachable via tools. Use `anime_search_media` to disco
 
 - Fetch full detail by AniList `id`, with adult content requiring `include_adult: true`; discover IDs through `anime_search_media`
 - Returns synopsis, genres, spoiler-flagged tags, studios, direct relations, images, streaming links, and separate AniList/MAL scores. `data_sources` identifies successful supplements; `not_found` means the ID did not resolve
-- `full_text: true` renders the complete domain result as fenced JSON. Default text uses a 500-character synopsis preview and bounded tag/relation details, with exact omission counts and a same-input retrieval instruction
+- `full_text: true` returns the complete result as fenced JSON; by default the synopsis is a 500-character preview and tags and relations are shortened, with counts of what was omitted
 
 ---
 
@@ -69,7 +70,7 @@ All resource data is also reachable via tools. Use `anime_search_media` to disco
 
 - Walk a franchise from an AniList `id` up to `max_depth` hops (default 2, max 4)
 - Returns `main` and `supplementary` entries with season year and episode/chapter counts, ordered by relation priority then year. `not_found` means the root ID did not resolve
-- `depth`, `parent_id`, `relation_to_parent`, and `path` describe the first shortest BFS discovery path. `relation_to_root` is populated only for direct root edges; root and deeper entries use null. Boundary nodes are returned without fetching their relations; `depth_reached` is the maximum returned hop count
+- `depth`, `parent_id`, `relation_to_parent`, and `path` show the shortest route to each entry. `relation_to_root` is set only for entries linked directly to the root, and is null otherwise. Entries at the hop limit are returned without their own relations; `depth_reached` is the deepest hop returned
 
 ---
 
@@ -84,7 +85,7 @@ All resource data is also reachable via tools. Use `anime_search_media` to disco
 
 - Supply exactly one of media `id`, `character_name`, or `voice_actor_name`. `language` filters only media cast lookups; `per_page` is capped at 25
 - Returns cast, voice actors, or media appearances according to `mode`. `truncated: true` carries next-page guidance for capped cast lists; `media_not_found`/`not_found` distinguish an unknown media ID from an unmatched name
-- Character appearances retain their own edge's media, role and actors; `voice_actor_data_available: false` distinguishes unavailable provider data from an empty list. `full_text: true` renders every role on this page and the full biography as fenced JSON; default biographies use 500-character previews and staff role details stop at 20, with exact omission counts
+- `voice_actor_data_available: false` means the provider had no voice actor data, as opposed to an empty list. `full_text: true` returns every role on the page and the full biography as fenced JSON; by default biographies are 500-character previews and staff roles stop at 20, with counts of what was omitted
 
 ---
 
@@ -112,7 +113,7 @@ All resource data is also reachable via tools. Use `anime_search_media` to disco
 ### `anime://media/{id}` <sub>resource</sub>
 
 - Read a compact `application/json` media record using an AniList `id` from `anime_search_media` or `anime_get_media`
-- The complete SDK-parsed ID segment must contain ASCII decimal digits representing 1–2147483647. Leading zeros are accepted; nondecimal suffixes, encoded whitespace, fractions, exponents, zero and overflow fail with `invalid_id` before upstream work. Transport URL normalization can strip literal tabs, newlines and trailing ASCII spaces before matching
+- The ID must be a whole number from 1 to 2147483647; anything else fails with `invalid_id` before any upstream call
 - Returns title variants, synopsis, scores, genres, streaming count, and cover image; use `anime_get_media` for tags, studios, streaming links, and relations
 
 ---
@@ -120,12 +121,6 @@ All resource data is also reachable via tools. Use `anime_search_media` to disco
 ## Features
 
 Built on [`@cyanheads/mcp-ts-core`](https://github.com/cyanheads/mcp-ts-core): stdio and Streamable HTTP transports, pluggable auth (`none` / `jwt` / `oauth`), swappable storage (`in-memory`, `filesystem`, `Supabase`, `Cloudflare KV/R2/D1`), structured logging with optional OpenTelemetry tracing.
-
-AniList serves only the first 5,000 search, season, and ranking entries. The last reachable page carries a notice when more matches exist; deeper pages fail with `page_depth_exceeded`. Narrow the criteria or request a lower page.
-
-AniList ID inputs are bounded to 1–2147483647. Optional enum inputs accept the exact empty-string form sentinel as absent; other unsupported values, including whitespace, still fail. Search sort lists drop blank items; an all-blank list uses omitted-sort behavior. Blank studio sort uses `POPULARITY_DESC`. Required media types and modes remain required.
-
-Provider text is escaped at the summary render boundary; structured data stays canonical. Media and character `full_text` JSON preserves complete domain values on the current response, while enrichment remains in its trailing content block. Upstream schedule pages request `TIME` order before pagination, preserving equal airing timestamps.
 
 Anime/manga-specific:
 
@@ -138,7 +133,7 @@ Anime/manga-specific:
 Agent-friendly output:
 
 - Dual scores surfaced separately — AniList `meanScore` (0–100) and MAL `score` (0–10) with population size (`scored_by`) so agents can reason about weight; never blended into a composite
-- Spoiler flags — the tag summary hides spoiler/adult tags; the first five detailed tags retain their flags. Complete tagged data is available in structured output and with `full_text: true`
+- Spoiler flags — the tag summary hides spoiler/adult tags; structured output and `full_text: true` carry all tags with their flags
 - Supplement provenance — `anime_get_media.data_sources` reports whether AniList, MAL/Jikan, and Kitsu data was retrieved; an unavailable supplement leaves its flag false
 - UTC timestamps throughout; season labels echoed (`WINTER 2024`) to avoid the winter/spring/summer/fall boundary footgun
 
@@ -252,7 +247,7 @@ No server-specific env vars are required. All framework variables are optional w
 | `MCP_HTTP_PORT` | Port for HTTP server. | `3010` |
 | `MCP_HTTP_HOST` | Hostname for HTTP server. | `127.0.0.1` |
 | `MCP_HTTP_ENDPOINT_PATH` | Endpoint path for the MCP server. | `/mcp` |
-| `MCP_SESSION_MODE` | Overrides the source-declared default: `auto`, `stateful`, or `stateless`. The framework schema default `auto` resolves to `stateful`. | `stateless` |
+| `MCP_SESSION_MODE` | Session mode: `auto`, `stateful`, or `stateless`. | `stateless` |
 | `MCP_AUTH_MODE` | Auth mode: `none`, `jwt`, or `oauth`. | `none` |
 | `MCP_LOG_LEVEL` | Log level (RFC 5424): `debug`, `info`, `notice`, `warning`, `error`. | `info` |
 | `LOG_TOOL_FAILURE_PAYLOADS` | Log failed calls' arguments and results, redacted by key name and capped at `LOG_TOOL_FAILURE_PAYLOAD_MAX_BYTES` (default `16384`). Secrets inside free-form values are not redacted. | `false` |
