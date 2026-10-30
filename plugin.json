@@ -1,0 +1,31 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "anime-mcp-server",
+  "version": "0.3.0",
+  "description": "Search anime/manga, get full detail, franchise relations, seasonal schedule, characters, rankings, and studio filmography via MCP. STDIO or Streamable HTTP.",
+  "author": {
+    "name": "Casey Hand",
+    "email": "casey@caseyjhand.com",
+    "url": "https://caseyjhand.com"
+  },
+  "homepage": "https://github.com/cyanheads/anime-mcp-server#readme",
+  "repository": "https://github.com/cyanheads/anime-mcp-server",
+  "license": "Apache-2.0",
+  "keywords": [
+    "anime",
+    "manga",
+    "anilist",
+    "myanimelist",
+    "jikan",
+    "kitsu",
+    "anime-database",
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "typescript",
+    "bun",
+    "stdio",
+    "streamable-http",
+    "ai-agent"
+  ]
+}
