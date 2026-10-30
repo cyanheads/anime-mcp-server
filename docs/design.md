@@ -11,7 +11,7 @@
 | `anime_get_relations` | Depth-bounded BFS relation graph with first shortest discovery paths, grouped as main/supplementary and ordered by relation priority then year. A presentation heuristic, not a topological chronology. | `id`, `max_depth` (int, 1–4) | `readOnlyHint: true`, `idempotentHint: true` |
 | `anime_get_schedule` | Airing schedule for a season or upcoming episode window. `season` mode: all anime airing in a given season/year, with an exact count only on the final page. `upcoming` mode: next episode for each airing title within a date window, with UTC timestamp and countdown. Each mode rejects the other mode's fields. | `mode` (`season`\|`upcoming`), `season` (`WINTER`\|`SPRING`\|`SUMMER`\|`FALL`) and `season_year` (season mode), `days_ahead` (upcoming mode, 1–30, 7 when omitted), `page`, `per_page` (max 50), `include_adult` | `readOnlyHint: true`, `openWorldHint: true` |
 | `anime_find_characters` | Characters and voice actors for a title, or look up a character/VA by name. Returns characters with their role (main/supporting/background), voice actors by language, and cross-links to other media. Exactly one identifier per call. | exactly one of `id` (media ID), `character_name`, `voice_actor_name`; `language` (AniList StaffLanguage enum: `JAPANESE`\|`ENGLISH`\|`KOREAN`\|etc., with `id` only), `page`, `per_page` | `readOnlyHint: true`, `openWorldHint: true` |
-| `anime_get_recommendations` | Recommendations for a title, merged from AniList and Jikan, with scores and vote counts. Optionally accepts what the user liked about the source title to contextualize picks. | `id`, `liked_aspects`, `page`, `per_page` | `readOnlyHint: true`, `idempotentHint: true` |
+| `anime_get_recommendations` | Source-specific AniList or Jikan recommendations with separate ratings, vote counts and Jikan availability. Optionally echoes liked aspects. | `id`, `source`, `liked_aspects`, `page`, `per_page` | `readOnlyHint: true`, `idempotentHint: true` |
 | `anime_get_rankings` | Top, trending, or seasonal rankings. Filterable by genre, tag, and format. `top` returns all-time by score; `trending` returns current week; `seasonal` returns the current or specified season sorted by popularity. | `mode` (`top`\|`trending`\|`seasonal`), `media_type` (`ANIME`\|`MANGA`), `format` (AniList MediaFormat enum), `genre`, `tag`, `season` (`WINTER`\|`SPRING`\|`SUMMER`\|`FALL`) and `season_year` (together or neither in `seasonal`; filters in `top`/`trending`), `page`, `per_page` (max 50), `include_adult` | `readOnlyHint: true`, `openWorldHint: true` |
 | `anime_get_studio` | A studio's full filmography by name or AniList studio ID. Returns one row per distinct title on a page (with a main-studio flag), sortable by year or score, with format, status, and episode count. | exactly one of `name`, `id`; `sort` (`POPULARITY_DESC`\|`SCORE_DESC`\|`START_DATE_DESC`\|`START_DATE`), `page`, `per_page` (max 25) | `readOnlyHint: true`, `idempotentHint: true` (when `id` provided) |
 
@@ -70,7 +70,7 @@ Multi-source anime and manga server for fans who care about the details. The wor
 - Franchise relation graph with depth-bounded BFS and heuristic ordering
 - Seasonal airing schedule and upcoming episode countdown
 - Characters + voice actors, bidirectionally (title → cast, VA → roles)
-- Recommendations merged from AniList and Jikan
+- Source-specific recommendations from AniList or Jikan, with separate ratings and votes
 - Top/trending rankings for anime/manga, with broadcast-season rankings and season/year filters restricted to anime
 - Studio filmography by name or ID
 - Adult content gated behind explicit `include_adult` opt-in (default: off)
@@ -85,7 +85,7 @@ Multi-source anime and manga server for fans who care about the details. The wor
 | Service | Wraps | Used By |
 |:--------|:------|:--------|
 | `AniListService` | AniList GraphQL API — `https://graphql.anilist.co` (POST, keyless) | `anime_search_media`, `anime_get_media`, `anime_get_relations`, `anime_get_schedule`, `anime_find_characters`, `anime_get_recommendations`, `anime_get_rankings`, `anime_get_studio`, `anime://media/{id}` |
-| `JikanService` | Jikan v4 REST API — `https://api.jikan.moe/v4` (GET, keyless, ~3 req/sec). **Endpoint routing is media-type-aware:** anime uses `/anime/{id}/full`, `/anime/{id}/recommendations`, `GET /anime?q=...`; manga uses `/manga/{id}/full`, `/manga/{id}/recommendations`, `GET /manga?q=...`. Service must branch on `media_type` for all ID and search calls. | `anime_search_media` (optional fallback for a title-only query with no AniList match; a failure leaves the AniList empty page with a notice), `anime_get_media` (MAL score supplement), `anime_get_recommendations` (merged) |
+| `JikanService` | Jikan v4 REST API — `https://api.jikan.moe/v4` (GET, keyless, ~3 req/sec). **Endpoint routing is media-type-aware:** anime uses `/anime/{id}/full`, `/anime/{id}/recommendations`, `GET /anime?q=...`; manga uses `/manga/{id}/full`, `/manga/{id}/recommendations`, `GET /manga?q=...`. Service must branch on `media_type` for all ID and search calls. | `anime_search_media` (optional fallback for a title-only query with no AniList match; a failure leaves the AniList empty page with a notice), `anime_get_media` (MAL score supplement), `anime_get_recommendations` (optional matching votes or selected candidate source) |
 | `KitsuService` | Kitsu JSON:API — `https://kitsu.io/api/edge` (GET, keyless). **Endpoint routing is media-type-aware:** anime uses `/anime/{id}` and `/anime?filter[text]=...`; manga uses `/manga/{id}` and `/manga?filter[text]=...`. Streaming links are relevant only for anime — skip Kitsu call when `media_type: MANGA`. | `anime_get_media` (streaming links supplement, anime only) |
 
 **Source strategy:** AniList is primary for structure, relations, characters, schedule, and studio data — its GraphQL collapses what would be many REST calls into one. Jikan contributes MAL scores and recommendation depth. Kitsu contributes streaming links where AniList's `externalLinks` (type: STREAMING) is incomplete. ID reconciliation via AniList's `idMal` field bridges AniList IDs ↔ MAL IDs.
@@ -110,7 +110,7 @@ No `server-config.ts` needed — zero required env vars. Rate limit handling is 
 4. **`anime_get_relations`** — depth-bounded BFS over AniList relation graph; relation-priority/year presentation heuristic
 5. **`anime_get_schedule`** — AniList `AiringSchedule` query (single-item) + `Page(media(...))` for season mode
 6. **`anime_find_characters`** — AniList `Media.characters` + `Staff` lookup
-7. **`anime_get_recommendations`** — AniList `Media.recommendations.nodes` + Jikan `/{media_type}/{idMal}/recommendations` merge
+7. **`anime_get_recommendations`** — AniList `Media.recommendations.nodes` with optional matching Jikan votes, or locally paged Jikan candidates resolved in one AniList batch
 8. **`anime_get_rankings`** — AniList `Page(media(sort:...))` with mode dispatch
 9. **`anime_get_studio`** — AniList `Studio(...)` query with `media` edges (`isMainStudio` + node), deduplicated per page
 10. **`anime://media/{id}` resource** — compact projection over the same media services, with complete decimal-segment validation
@@ -214,15 +214,18 @@ Calls 2 and 3 run in parallel via `Promise.allSettled`. Result always includes p
 | 1 | AniList `Character(search)` or `Staff(search)` | Find character/VA node by name |
 | 2 | AniList `Character.media` or `Staff.characterMedia` | Roles across titles |
 
-### `anime_get_recommendations` — merged from two sources
+### `anime_get_recommendations` — source-specific candidate pages
 
 | # | Call | Service | Purpose |
 |:--|:-----|:--------|:--------|
-| 1 | AniList `Media.recommendations.nodes` | AniList | Community-voted recommendations with rating scores |
-| 2 | Jikan `/{media_type}/{idMal}/recommendations` | Jikan | MAL user recommendations with vote counts; route: `/anime/{id}/recommendations` for ANIME, `/manga/{id}/recommendations` for MANGA |
-| — | Merge + dedup on `idMal` / AniList ID | local | Unified list, source provenance per item |
+| 1 | AniList `Media(id)` | AniList | Establish source existence, media type and MAL mapping; a missing source is `not_found` |
+| 2a | AniList `Media.recommendations.nodes` | AniList | Default source: page community recommendations by rating, then annotate matching MAL votes when Jikan is available |
+| 2b | Jikan `/{media_type}/{idMal}/recommendations` | Jikan | Jikan source: deduplicate the supplied candidate list using maximum votes; order votes descending/MAL ID ascending, then slice the requested local page |
+| 3b | AniList `Page.media(idMal_in, type, isAdult: false)` | AniList | Resolve only the selected, at-most-25 MAL IDs in one batch; restore candidate order through Map lookup |
 
-Both calls parallel via `Promise.allSettled`. Items deduped by ID; AniList rating + Jikan votes surfaced separately (not summed).
+`source` defaults to `anilist`. Both surfaces carry the selected source and `jikan_status`: `available`, `unavailable` for an optional annotation failure, or `not_applicable` without a source MAL mapping. A Jikan request without that mapping returns an empty page without Jikan or resolution calls. Selected Jikan or resolution failures are fatal with retry-or-switch recovery. Jikan rows use null AniList recommendation ratings and `sources: ["jikan"]`; adult/unresolved rows are omitted, but `has_next_page` follows candidate slicing even when the resolved page is empty. These are pages of the list Jikan supplies, without a global-ranking or cross-call snapshot guarantee. Ratings and vote counts remain separate.
+
+One 50-second operation budget includes source lookup, service retries, pacing, resolution and optional annotations. The optional Jikan path makes one attempt within five seconds, so unavailable annotations cannot consume multiple long retries. Caller cancellation reaches every fetch, pacer wait and retry backoff, and never degrades into successful partial output.
 
 ---
 
@@ -230,7 +233,7 @@ Both calls parallel via `Promise.allSettled`. Items deduped by ID; AniList ratin
 
 **No synthesized composite score.** `idea.md` is explicit: surface AniList `meanScore` and Jikan `score` side by side. Blending them into a fabricated number misleads — different scales, different communities, different methodologies. Output carries both with their population size (`scored_by`, `popularity`) so the agent can reason about weight.
 
-**AniList primary, not parity.** AniList's GraphQL collapses media + relations + characters + schedule + studio into a single query tree. Jikan and Kitsu are supplements for data AniList doesn't carry well: MAL scores (the scores fans cite in conversation), Kitsu streaming links with sub/dub language detail. Tools fan out to supplements in parallel; AniList failure is fatal, supplement failure degrades gracefully.
+**AniList primary, not parity.** AniList's GraphQL collapses media + relations + characters + schedule + studio into a single query tree. Jikan and Kitsu supplement MAL scores and streaming links. Recommendations also permit Jikan as the explicit candidate source: paging it separately avoids an invented cross-source rank and duplicate candidates across AniList pages. Optional supplement failures degrade gracefully; a selected source or required resolution failure is fatal.
 
 **`anime_get_studio` as a dedicated tool.** Could be a filter on `anime_search_media`. Kept separate because the workflow is different (completionist filmography, not a discovery page), the result shape is a curated sorted filmography (not a search result), and the output carries studio metadata (studio name, ID) not present in search results.
 
@@ -275,4 +278,4 @@ Both calls parallel via `Promise.allSettled`. Items deduped by ID; AniList ratin
 - **No MAL user list, watchlist, or ratings.** Jikan supports user list endpoints, but these require MAL authentication. Out of scope for a keyless server.
 - **No AnimeThemes integration.** `idea.md` lists it as "optional garnish." Deferred — not enough workflow coverage to justify an eighth service dependency at v0.1.
 - **Kitsu streaming links are anime-only.** Kitsu has a `/manga` resource type (confirmed live) but no streaming links relationship — that concept doesn't apply to manga. Kitsu calls are skipped entirely when `media_type: MANGA`.
-- **Jikan manga recommendations exist but cover fewer titles.** Jikan `/manga/{id}/recommendations` is live and returns the same shape as anime, but community rec volume is lower than anime. Merged list may be shorter for manga.
+- **Jikan manga recommendations use the same candidate shape as anime.** Route manga sources through `/manga/{id}/recommendations`; a valid source may have an empty list.

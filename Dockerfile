@@ -7,7 +7,7 @@
 # The --platform guard keeps the build stage on the caller's native platform —
 # multi-arch builds abort under QEMU on Bun 1.4 without it.
 # ==============================================================================
-FROM --platform=$BUILDPLATFORM oven/bun:1.4.3 AS build
+FROM --platform=$BUILDPLATFORM oven/bun:1.4.4 AS build
 
 WORKDIR /usr/src/app
 
@@ -22,11 +22,13 @@ RUN --mount=type=cache,target=/root/.bun/install/cache \
 # Copy the rest of the source code
 COPY . .
 
+RUN mkdir -p skills
+
 # Build the application
 RUN bun run build
 
 # Install target-platform production dependencies on the native build platform.
-FROM --platform=$BUILDPLATFORM oven/bun:1.4.3 AS deps
+FROM --platform=$BUILDPLATFORM oven/bun:1.4.4 AS deps
 
 WORKDIR /usr/src/app
 COPY package.json bun.lock bunfig.toml ./
@@ -65,7 +67,7 @@ RUN rm -rf node_modules/@socketsecurity/bun-security-scanner
 # application. It uses a slim base image and only includes production
 # dependencies and build artifacts.
 # ==============================================================================
-FROM oven/bun:1.4.3-slim AS production
+FROM oven/bun:1.4.4-slim AS production
 
 WORKDIR /usr/src/app
 
@@ -87,6 +89,7 @@ COPY --from=deps /usr/src/app/node_modules ./node_modules
 
 # Copy the compiled application code from the build stage
 COPY --from=build /usr/src/app/dist ./dist
+COPY --from=build /usr/src/app/skills ./skills
 
 # The 'oven/bun' image already provides a non-root user named 'bun'.
 # We will use this existing user for enhanced security.

@@ -58,3 +58,61 @@ mcpTest('Jikan spaces concurrent calls and retry starts', async ({ fetchMock }) 
     vi.useRealTimers();
   }
 });
+
+mcpTest(
+  'cancels an AniList request queued behind the sliding window without starting fetch',
+  async ({ fetchMock }) => {
+    vi.resetModules();
+    const { getMediaById, shutdownAniList } = await import('@/services/anilist/anilist-service.js');
+    vi.useFakeTimers();
+    fetchMock.route({
+      match: /graphql\.anilist\.co/,
+      respond: Response.json({ data: { Media: null } }),
+    });
+    try {
+      const initial = Promise.all(Array.from({ length: 30 }, (_, id) => getMediaById(id + 1)));
+      await vi.advanceTimersByTimeAsync(0);
+      await initial;
+      const controller = new AbortController();
+      const pending = getMediaById(31, false, controller.signal);
+      const reason = new DOMException('queued AniList cancellation', 'AbortError');
+      const assertion = expect(pending).rejects.toBe(reason);
+      await vi.advanceTimersByTimeAsync(0);
+      controller.abort(reason);
+      await vi.advanceTimersByTimeAsync(0);
+      await assertion;
+      await vi.advanceTimersByTimeAsync(30000);
+      expect(fetchMock.calls).toHaveLength(30);
+    } finally {
+      shutdownAniList();
+      vi.useRealTimers();
+    }
+  },
+);
+
+mcpTest(
+  'cancels a Jikan recommendation queued behind the start gap without starting fetch',
+  async ({ fetchMock }) => {
+    vi.resetModules();
+    const { getRecommendations, shutdownJikan } = await import('@/services/jikan/jikan-service.js');
+    vi.useFakeTimers();
+    fetchMock.route({ match: /api\.jikan\.moe/, respond: Response.json({ data: [] }) });
+    try {
+      const initial = getRecommendations(1, 'ANIME');
+      await vi.advanceTimersByTimeAsync(0);
+      await initial;
+      const controller = new AbortController();
+      const reason = new DOMException('queued Jikan cancellation', 'AbortError');
+      const pending = getRecommendations(2, 'ANIME', { signal: controller.signal });
+      const assertion = expect(pending).rejects.toBe(reason);
+      await vi.advanceTimersByTimeAsync(0);
+      controller.abort(reason);
+      await vi.advanceTimersByTimeAsync(1000);
+      await assertion;
+      expect(fetchMock.calls).toHaveLength(1);
+    } finally {
+      shutdownJikan();
+      vi.useRealTimers();
+    }
+  },
+);

@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { markdownImage, escapeMarkdownInline as text } from '@cyanheads/mcp-ts-core/utils';
 import * as anilist from '@/services/anilist/anilist-service.js';
 import {
   exactResultCount,
@@ -13,7 +14,7 @@ import {
   PAGE_DEPTH_EDGE_NOTICE,
   pastEndNotice,
 } from '@/services/anilist/pagination.js';
-import { summaryView } from '../render-text.js';
+import { headingText } from '../render-text.js';
 
 const SeasonEnum = z
   .enum(['WINTER', 'SPRING', 'SUMMER', 'FALL'])
@@ -299,12 +300,11 @@ export const animeGetSchedule = tool('anime_get_schedule', {
   },
 
   format: (result) => {
-    result = summaryView(result);
     const lines: string[] = [];
 
     if (result.mode === 'season') {
       lines.push(
-        `## ${result.season_label} Anime Schedule`,
+        `## ${headingText(result.season_label ?? 'Unknown season')} Anime Schedule`,
         `mode: ${result.mode} | ${result.total_results !== null ? `${result.total_results} titles` : 'Results'} · page ${result.page}`,
         '',
       );
@@ -320,10 +320,12 @@ export const animeGetSchedule = tool('anime_get_schedule', {
     for (const entry of result.entries) {
       const displayTitle = entry.title_english ?? entry.title ?? 'Unknown';
       const score = entry.mean_score !== null ? ` · ${entry.mean_score}/100` : '';
-      const fmt = entry.format ? ` · ${entry.format}` : '';
-      const status = entry.status ? ` status:${entry.status}` : '';
-      const cover = entry.cover_image_url ? ` cover:${entry.cover_image_url}` : '';
-      const titleRomaji = entry.title ? ` title:${entry.title}` : '';
+      const fmt = entry.format ? ` · ${text(entry.format)}` : '';
+      const status = entry.status ? ` status:${text(entry.status)}` : '';
+      const cover = entry.cover_image_url
+        ? ` cover:${markdownImage('cover', entry.cover_image_url)}`
+        : '';
+      const titleRomaji = entry.title ? ` title:${text(entry.title)}` : '';
 
       if (result.mode === 'upcoming' && entry.next_airing_at_utc) {
         const seconds = entry.time_until_airing_seconds ?? 0;
@@ -331,16 +333,16 @@ export const animeGetSchedule = tool('anime_get_schedule', {
         const days = Math.floor(hours / 24);
         const countdown = days > 0 ? `${days}d ${hours % 24}h` : `${hours}h`;
         lines.push(
-          `**${displayTitle}** [AL:${entry.id}]${fmt}${score}${status}${titleRomaji}`,
-          `  Ep ${entry.next_episode} in **${countdown}** — ${entry.next_airing_at_utc} (time_until_airing_seconds:${entry.time_until_airing_seconds ?? 0})${cover}`,
+          `**${text(displayTitle)}** [AL:${entry.id}]${fmt}${score}${status}${titleRomaji}`,
+          `  Ep ${entry.next_episode} in **${countdown}** — ${text(entry.next_airing_at_utc)} (time_until_airing_seconds:${entry.time_until_airing_seconds ?? 0})${cover}`,
         );
       } else {
         const ep = entry.episodes !== null ? ` · ${entry.episodes} eps` : '';
         const airing = entry.next_airing_at_utc
-          ? ` · Next ep ${entry.next_episode}: ${entry.next_airing_at_utc} (time_until_airing_seconds:${entry.time_until_airing_seconds ?? 0})`
+          ? ` · Next ep ${entry.next_episode}: ${text(entry.next_airing_at_utc)} (time_until_airing_seconds:${entry.time_until_airing_seconds ?? 0})`
           : '';
         lines.push(
-          `**${displayTitle}** [AL:${entry.id}]${fmt}${ep}${score}${status}${airing}${titleRomaji}${cover}`,
+          `**${text(displayTitle)}** [AL:${entry.id}]${fmt}${ep}${score}${status}${airing}${titleRomaji}${cover}`,
         );
       }
     }

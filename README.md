@@ -1,13 +1,13 @@
 <div align="center">
   <h1>@cyanheads/anime-mcp-server</h1>
   <p><b>Search anime/manga, get full detail, franchise relations, seasonal schedule, characters, rankings, and studio filmography via MCP. STDIO or Streamable HTTP.</b>
-  <div>8 Tools • 1 Resource</div>
+  <div>8 Tools • 2 Resources</div>
   </p>
 </div>
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.3.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/anime-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.3.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/anime-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/anime-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.3-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.3.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/anime-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.4.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/anime-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/anime-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.4-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -34,7 +34,7 @@ Anime and manga data from AniList, Jikan (MyAnimeList), and Kitsu. Search titles
 | `anime_get_relations` | Walks the related-works graph within a hop limit. Groups main and supplementary entries by relation priority, then year; not a strict chronology. |
 | `anime_get_schedule` | Airing schedule for a season or upcoming episode window. Season mode lists all anime airing in a given season/year. Upcoming mode returns the next episode for each airing title within a date window, with UTC timestamp and countdown. |
 | `anime_find_characters` | Characters and voice actors for a title, or look up a character/VA by name. Returns characters with role (main/supporting/background), voice actors by language, and cross-links to other media. |
-| `anime_get_recommendations` | AniList recommendations with matching Jikan (MAL) vote counts. Optionally echoes what the user liked about the source title to contextualize picks. |
+| `anime_get_recommendations` | Page AniList recommendations with matching MAL votes, or Jikan candidates resolved through AniList. Reports the selected source and Jikan availability; optionally echoes what you liked. |
 | `anime_get_rankings` | Top, trending, or seasonal rankings. Filterable by genre, tag, and format. Top returns all-time by score; trending uses AniList's trending order; seasonal returns the current or specified season sorted by popularity. |
 | `anime_get_studio` | A studio's full filmography by name or AniList studio ID — all titles the studio produced, sortable by year or score, with format, status, and episode count. |
 
@@ -43,8 +43,9 @@ Anime and manga data from AniList, Jikan (MyAnimeList), and Kitsu. Search titles
 | Resource | Description |
 |:---|:---|
 | `anime://media/{id}` | Compact media record by AniList ID — title, synopsis, scores, genres, streaming count, and cover image. Stable URI for injectable context. |
+| `skill://anime-guide/SKILL.md` | [Caller guide](./skills/anime-guide/SKILL.md) for franchise research, cast-to-career lookups, studio filmographies, and recommendation coverage. Also included in plugin, npm, Docker, and MCPB installs. |
 
-All resource data is also reachable via tools. Use `anime_search_media` to discover AniList IDs before fetching the resource URI.
+Media resource data is also reachable via tools. Use `anime_search_media` to discover AniList IDs before fetching its resource URI.
 
 ---
 
@@ -91,8 +92,8 @@ All resource data is also reachable via tools. Use `anime_search_media` to disco
 
 ### `anime_get_recommendations` <sub>tool</sub>
 
-- Fetch recommendations for an AniList `id`, paging with `page`/`per_page` (max 25); optional `liked_aspects` is echoed unchanged
-- Returns separate `anilist_rating` and `jikan_votes`, with `sources` identifying each contribution. `truncated: true` supplies next-page guidance; `not_found` means the source ID did not resolve
+- Fetch recommendations for an AniList `id` with `source: "anilist"` (default) or `source: "jikan"`; optional `liked_aspects` is echoed unchanged. AniList pages its recommendations and adds matching MAL votes. Jikan deduplicates its supplied list by maximum votes, orders votes descending/MAL ID ascending, and locally pages candidates with `page`/`per_page` (max 25) before resolving that slice through AniList. Adult and unresolved candidates are omitted; `has_next_page` still follows candidate pages. Jikan does not guarantee a global ranking or a stable snapshot across calls
+- Both surfaces report `source` and `jikan_status` (`available`, `unavailable`, or `not_applicable` when the source lacks a MAL ID), plus separate `anilist_rating`, `jikan_votes`, and item `sources`. Jikan mode uses null `anilist_rating` and `sources: ["jikan"]`. Optional annotation failures retain AniList results; selected Jikan/resolution failures return retry-or-switch guidance. `truncated: true` supplies continuation with the same source; `not_found` means the source ID did not resolve, while valid empty pages succeed
 
 ---
 
@@ -303,6 +304,7 @@ The Dockerfile defaults to HTTP transport, stateless session mode, and logs to `
 | `src/services/jikan` | Jikan v4 REST client — MAL scores and recommendations. |
 | `src/services/kitsu` | Kitsu JSON:API client — streaming links with sub/dub language detail. |
 | `tests/` | Unit and integration tests mirroring `src/`. |
+| `skills/` | Published caller guide, available through plugins and MCP skill discovery. |
 | `changelog/` | Per-version changelog files (`changelog/<minor>.x/<version>.md`). |
 
 ---

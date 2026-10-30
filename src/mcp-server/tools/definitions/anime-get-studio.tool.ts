@@ -5,10 +5,15 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import {
+  markdownImage,
+  markdownLink,
+  escapeMarkdownInline as text,
+} from '@cyanheads/mcp-ts-core/utils';
 import * as anilist from '@/services/anilist/anilist-service.js';
 import { pastEndNotice } from '@/services/anilist/pagination.js';
 import type { MediaNode, StudioMediaEdge } from '@/services/anilist/types.js';
-import { summaryView } from '../render-text.js';
+import { headingText } from '../render-text.js';
 
 /**
  * One row per distinct title on the page, in first-credit order. AniList returns
@@ -242,10 +247,9 @@ export const animeGetStudio = tool('anime_get_studio', {
   },
 
   format: (result) => {
-    result = summaryView(result);
     const lines: string[] = [
-      `## ${result.studio_name} Filmography`,
-      `AniList ID: ${result.studio_id}${result.is_animation_studio ? ' · Animation Studio' : ''} | studio_site_url: ${result.studio_site_url ?? 'none'}`,
+      `## ${headingText(result.studio_name)} Filmography`,
+      `AniList ID: ${result.studio_id}${result.is_animation_studio ? ' · Animation Studio' : ''} | studio_site_url: ${result.studio_site_url ? markdownLink('studio', result.studio_site_url) : 'none'}`,
       `${result.total_titles !== null ? `${result.total_titles} titles` : 'Titles'} · page ${result.page}`,
       '',
     ];
@@ -258,19 +262,19 @@ export const animeGetStudio = tool('anime_get_studio', {
     for (const m of result.filmography) {
       const displayTitle = m.title_english ?? m.title ?? 'Unknown';
       const score = m.mean_score !== null ? ` · ${m.mean_score}/100` : '';
-      const fmt = m.format ? ` · ${m.format}` : '';
+      const fmt = m.format ? ` · ${text(m.format)}` : '';
       const ep = m.episodes !== null ? ` · ${m.episodes} eps` : '';
-      const season = m.season ? ` · ${m.season}` : '';
+      const season = m.season ? ` · ${text(m.season)}` : '';
       const adult = m.is_adult ? ' · [Adult]' : '';
       const credit = m.is_main_studio ? ' · main studio' : ' · co-credit';
       const malId = m.id_mal !== null ? `/MAL:${m.id_mal}` : '';
-      const typeLabel = ` type:${m.type}`;
-      const status = m.status ? ` status:${m.status}` : '';
+      const typeLabel = ` type:${text(m.type)}`;
+      const status = m.status ? ` status:${text(m.status)}` : '';
       const seasonYear = m.season_year !== null ? ` season_year:${m.season_year}` : '';
-      const cover = m.cover_image_url ? ` cover:${m.cover_image_url}` : '';
-      const titleRomaji = m.title ? ` title:${m.title}` : '';
+      const cover = m.cover_image_url ? ` cover:${markdownImage('cover', m.cover_image_url)}` : '';
+      const titleRomaji = m.title ? ` title:${text(m.title)}` : '';
       lines.push(
-        `**${displayTitle}** [AL:${m.id}${malId}]${typeLabel}${fmt}${status}${season}${seasonYear}${ep}${score}${adult}${credit}${titleRomaji}${cover}`,
+        `**${text(displayTitle)}** [AL:${m.id}${malId}]${typeLabel}${fmt}${status}${season}${seasonYear}${ep}${score}${adult}${credit}${titleRomaji}${cover}`,
       );
     }
 

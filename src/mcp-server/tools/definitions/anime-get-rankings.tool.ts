@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { markdownImage, escapeMarkdownInline as text } from '@cyanheads/mcp-ts-core/utils';
 import * as anilist from '@/services/anilist/anilist-service.js';
 import {
   exactResultCount,
@@ -13,7 +14,7 @@ import {
   PAGE_DEPTH_EDGE_NOTICE,
   pastEndNotice,
 } from '@/services/anilist/pagination.js';
-import { summaryView } from '../render-text.js';
+import { headingText } from '../render-text.js';
 
 const SeasonEnum = z
   .enum(['WINTER', 'SPRING', 'SUMMER', 'FALL'])
@@ -300,7 +301,6 @@ export const animeGetRankings = tool('anime_get_rankings', {
   },
 
   format: (result) => {
-    result = summaryView(result);
     const seasonSuffix = result.season_label ? ` · ${result.season_label}` : '';
     const modeLabel =
       result.mode === 'top'
@@ -312,8 +312,8 @@ export const animeGetRankings = tool('anime_get_rankings', {
           : `${result.season_label ?? 'Current Season'} ${result.media_type}`;
 
     const lines: string[] = [
-      `## ${modeLabel}`,
-      `mode: ${result.mode} | season_label: ${result.season_label ?? 'none'}`,
+      `## ${headingText(modeLabel)}`,
+      `mode: ${result.mode} | season_label: ${text(result.season_label ?? 'none')}`,
       `Page ${result.page}${result.total_results !== null ? ` · ${result.total_results} total` : ''}`,
       '',
     ];
@@ -321,13 +321,13 @@ export const animeGetRankings = tool('anime_get_rankings', {
     for (const entry of result.entries) {
       const title = entry.title_english ?? entry.title ?? 'Unknown';
       const score = entry.mean_score !== null ? ` · ${entry.mean_score}/100` : '';
-      const fmt = entry.format ? ` · ${entry.format}` : '';
+      const fmt = entry.format ? ` · ${text(entry.format)}` : '';
       const ep = entry.episodes !== null ? ` · ${entry.episodes} eps` : '';
       const chap = entry.chapters !== null ? ` chapters:${entry.chapters}` : '';
       const adult = entry.is_adult ? ' · [Adult]' : '';
       lines.push(
-        `${entry.rank}. **${title}** (${entry.title ?? '?'}) [AL:${entry.id}${entry.id_mal !== null ? `/MAL:${entry.id_mal}` : ''}]${fmt}${score}${ep}${chap}${adult}`,
-        `   status: ${entry.status ?? 'N/A'} | season: ${entry.season ?? 'N/A'} | cover: ${entry.cover_image_url ?? 'none'}`,
+        `${entry.rank}. **${text(title)}** (${text(entry.title ?? '?')}) [AL:${entry.id}${entry.id_mal !== null ? `/MAL:${entry.id_mal}` : ''}]${fmt}${score}${ep}${chap}${adult}`,
+        `   status: ${text(entry.status ?? 'N/A')} | season: ${text(entry.season ?? 'N/A')} | cover: ${entry.cover_image_url ? markdownImage('cover', entry.cover_image_url) : 'none'}`,
       );
     }
 

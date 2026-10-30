@@ -5,10 +5,12 @@
 
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
+import { Parser } from 'commonmark';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeGetRecommendations } from '@/mcp-server/tools/definitions/anime-get-recommendations.tool.js';
 import type { MediaDetail, RecommendationNode } from '@/services/anilist/types.js';
 import type { JikanRecommendation } from '@/services/jikan/types.js';
+import { expectLiteralProse } from '../helpers/markdown.js';
 
 vi.mock('@/services/anilist/anilist-service.js');
 vi.mock('@/services/jikan/jikan-service.js');
@@ -102,6 +104,17 @@ describe('animeGetRecommendations', () => {
     vi.resetAllMocks();
   });
 
+  it('keeps AniList order sorted by recommendation rating and retains a zero-vote annotation', async () => {
+    vi.mocked(anilist.getMediaById).mockResolvedValue(sourceDetail);
+    vi.mocked(anilist.getRecommendations).mockResolvedValue(mockAnilistRecs);
+    vi.mocked(jikan.getRecommendations).mockResolvedValue([{ ...mockJikanRecs[0]!, votes: 0 }]);
+    const result = await runToolContract(animeGetRecommendations, { id: 11757 });
+    expect(result.structuredContent).toMatchObject({
+      recommendations: [{ jikan_votes: 0, sources: ['anilist', 'jikan'] }],
+    });
+    expect(JSON.stringify(result.content)).toContain('MAL votes: 0');
+  });
+
   it('escapes recommended provider titles only in summaries', async () => {
     const title = '*[title]*\r\n<script>';
     vi.mocked(anilist.getRecommendations).mockResolvedValue({
@@ -120,9 +133,38 @@ describe('animeGetRecommendations', () => {
     vi.mocked(jikan.getRecommendations).mockResolvedValue([]);
     const result = await runToolContract(animeGetRecommendations, { id: 11757 });
     expect(result.structuredContent).toMatchObject({ recommendations: [{ title }] });
-    expect(JSON.stringify(result.content)).toContain(
-      '&#42;&#91;title&#93;&#42;&#13;&#10;&#60;script&#62;',
-    );
+    expectLiteralProse(result.content, title);
+  });
+
+  it('renders ordinary punctuation and the original cover destination in CommonMark', async () => {
+    const title = 'Re:Zero - Starting Life (2016)';
+    const url = 'https://example.com/a_b.jpg?x=1&y=2#cover';
+    vi.mocked(anilist.getMediaById).mockResolvedValue(sourceDetail);
+    vi.mocked(jikan.getRecommendations).mockResolvedValue([]);
+    vi.mocked(anilist.getRecommendations).mockResolvedValue({
+      ...mockAnilistRecs,
+      nodes: [
+        {
+          ...mockAnilistRecs.nodes[0]!,
+          mediaRecommendation: {
+            ...mockAnilistRecs.nodes[0]!.mediaRecommendation!,
+            title: { romaji: title, english: title, native: null },
+            format: 'TV_SHORT',
+            coverImage: { large: url, extraLarge: null, medium: null, color: null },
+          },
+        },
+      ],
+    });
+    const result = await runToolContract(animeGetRecommendations, { id: 11757 });
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain(title);
+    expect(text).toContain('TV_SHORT');
+    const walker = new Parser().parse(text).walker();
+    const destinations: string[] = [];
+    for (let event = walker.next(); event; event = walker.next()) {
+      if (event.entering && event.node.type === 'image') destinations.push(event.node.destination!);
+    }
+    expect(destinations).toContain(url);
   });
 
   it('returns merged recommendations from AniList and Jikan', async () => {
@@ -144,6 +186,46 @@ describe('animeGetRecommendations', () => {
     expect(rec.jikan_votes).toBe(25);
     expect(rec.sources).toContain('anilist');
     expect(rec.sources).toContain('jikan');
+  });
+
+  it('returns Jikan-only candidates in vote order using one selected-ID resolution batch', async () => {
+    vi.mocked(anilist.getMediaById).mockResolvedValue(sourceDetail);
+    vi.mocked(anilist.getRecommendations).mockResolvedValue(mockAnilistRecs);
+    vi.mocked(jikan.getRecommendations).mockResolvedValue([
+      { ...mockJikanRecs[0]!, entry: { ...mockJikanRecs[0]!.entry, mal_id: 3 }, votes: 20 },
+      { ...mockJikanRecs[0]!, entry: { ...mockJikanRecs[0]!.entry, mal_id: 2 }, votes: 20 },
+      { ...mockJikanRecs[0]!, entry: { ...mockJikanRecs[0]!.entry, mal_id: 2 }, votes: 1 },
+    ]);
+    const node = mockAnilistRecs.nodes[0]!.mediaRecommendation!;
+    vi.mocked(anilist.getMediaByMalIds).mockResolvedValue(
+      new Map([
+        [3, { ...node, id: 103, idMal: 3 }],
+        [2, { ...node, id: 102, idMal: 2 }],
+      ]),
+    );
+    const result = await runToolContract(animeGetRecommendations, {
+      id: 11757,
+      source: 'jikan',
+      per_page: 2,
+    });
+    expect(result.structuredContent).toMatchObject({
+      source: 'jikan',
+      jikan_status: 'available',
+      recommendations: [
+        { id: 102, jikan_votes: 20, anilist_rating: null, sources: ['jikan'] },
+        { id: 103, jikan_votes: 20, anilist_rating: null, sources: ['jikan'] },
+      ],
+    });
+    expect(result.isError).toBeFalsy();
+    expect(anilist.getMediaByMalIds).toHaveBeenCalledExactlyOnceWith(
+      [2, 3],
+      'ANIME',
+      false,
+      expect.any(AbortSignal),
+    );
+    expect(anilist.getRecommendations).not.toHaveBeenCalled();
+    expect(JSON.stringify(result.content)).toContain('source: jikan');
+    expect(JSON.stringify(result.content)).toContain('jikan_status: available');
   });
 
   it('includes liked_aspects in the output when provided', async () => {
@@ -315,7 +397,7 @@ describe('animeGetRecommendations tool contract', () => {
     });
     const capped = await runToolContract(animeGetRecommendations, { id: 11757, per_page: 1 });
     const notice =
-      'More recommendations are available. Call anime_get_recommendations with page 2, the same id, and the same per_page to continue.';
+      'More recommendations are available. Call anime_get_recommendations with page 2, source anilist, the same id, and the same per_page to continue.';
     expect(capped.structuredContent).toMatchObject({
       truncated: true,
       shown: 1,
@@ -361,5 +443,79 @@ describe('animeGetRecommendations tool contract', () => {
     expect(result.structuredContent).toMatchObject({
       error: { code: JsonRpcErrorCode.InvalidParams },
     });
+  });
+
+  it.each(['unknown', '', false])(
+    'rejects invalid source %j on both error surfaces',
+    async (source) => {
+      const input: { id: number } & Record<string, unknown> = { id: 11757, source };
+      const result = await runToolContract(animeGetRecommendations, input);
+      expect(result.structuredContent).toMatchObject({
+        error: { code: JsonRpcErrorCode.InvalidParams },
+      });
+      expect(JSON.stringify(result.content)).toContain('source');
+      expect(anilist.getMediaById).not.toHaveBeenCalled();
+    },
+  );
+
+  it('reports optional failure and no-MAL status even on empty results', async () => {
+    vi.mocked(anilist.getRecommendations).mockResolvedValue({ nodes: [], hasNextPage: false });
+    vi.mocked(anilist.getMediaById).mockResolvedValue(sourceDetail);
+    vi.mocked(jikan.getRecommendations).mockRejectedValue(new Error('unavailable'));
+    const unavailable = await runToolContract(animeGetRecommendations, { id: 11757 });
+    expect(unavailable.structuredContent).toMatchObject({
+      source: 'anilist',
+      jikan_status: 'unavailable',
+      recommendations: [],
+    });
+    expect(JSON.stringify(unavailable.content)).toContain('jikan_status: unavailable');
+    vi.mocked(anilist.getMediaById).mockResolvedValue({ ...sourceDetail, idMal: null });
+    vi.mocked(jikan.getRecommendations).mockClear();
+    vi.mocked(anilist.getRecommendations).mockClear();
+    const noMal = await runToolContract(animeGetRecommendations, { id: 11757, source: 'jikan' });
+    expect(noMal.structuredContent).toMatchObject({
+      source: 'jikan',
+      jikan_status: 'not_applicable',
+      recommendations: [],
+      has_next_page: false,
+    });
+    expect(JSON.stringify(noMal.content)).toContain('jikan_status: not_applicable');
+    expect(jikan.getRecommendations).not.toHaveBeenCalled();
+    expect(anilist.getMediaByMalIds).not.toHaveBeenCalled();
+    expect(anilist.getRecommendations).not.toHaveBeenCalled();
+  });
+
+  it.each(['jikan_unavailable', 'resolution_unavailable'] as const)(
+    'returns actionable %s on both surfaces',
+    async (reason) => {
+      vi.mocked(anilist.getMediaById).mockResolvedValue(sourceDetail);
+      vi.mocked(jikan.getRecommendations).mockResolvedValue(mockJikanRecs);
+      const failure = new Error('upstream unavailable');
+      if (reason === 'jikan_unavailable')
+        vi.mocked(jikan.getRecommendations).mockRejectedValue(failure);
+      else vi.mocked(anilist.getMediaByMalIds).mockRejectedValue(failure);
+      const result = await runToolContract(animeGetRecommendations, { id: 11757, source: 'jikan' });
+      const recovery =
+        reason === 'jikan_unavailable'
+          ? 'Retry the same request or use source anilist for AniList recommendations.'
+          : 'Retry the same Jikan page or use source anilist for AniList recommendations.';
+      expect(result.structuredContent).toMatchObject({
+        error: {
+          code: JsonRpcErrorCode.ServiceUnavailable,
+          data: { reason, recovery: { hint: recovery } },
+        },
+      });
+      expect(JSON.stringify(result.content)).toContain(recovery);
+    },
+  );
+
+  it('escapes caller liked_aspects without changing their structured meaning', async () => {
+    const liked_aspects = '*_[liked](javascript:alert(1))\n<script> &copy;';
+    vi.mocked(anilist.getMediaById).mockResolvedValue(sourceDetail);
+    vi.mocked(anilist.getRecommendations).mockResolvedValue(mockAnilistRecs);
+    vi.mocked(jikan.getRecommendations).mockResolvedValue([]);
+    const result = await runToolContract(animeGetRecommendations, { id: 11757, liked_aspects });
+    expect(result.structuredContent).toMatchObject({ liked_aspects });
+    expectLiteralProse(result.content, liked_aspects);
   });
 });

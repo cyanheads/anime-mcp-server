@@ -8,6 +8,7 @@ import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testi
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeGetStudio } from '@/mcp-server/tools/definitions/anime-get-studio.tool.js';
 import type { MediaNode, StudioDetail, StudioMediaEdge } from '@/services/anilist/types.js';
+import { expectLiteralProse, expectMarkdownDestination } from '../helpers/markdown.js';
 
 vi.mock('@/services/anilist/anilist-service.js');
 
@@ -78,9 +79,9 @@ describe('animeGetStudio', () => {
     vi.mocked(anilist.searchStudio).mockResolvedValue({ ...mockStudioDetail, name });
     const result = await runToolContract(animeGetStudio, { name: 'studio', sort: '' });
     expect(result.structuredContent).toMatchObject({ studio_name: name });
-    expect(JSON.stringify(result.content)).toContain(
-      '&#42;&#91;studio&#93;&#42;&#13;&#10;&#60;script&#62;',
-    );
+    expectLiteralProse(result.content, name);
+    expectMarkdownDestination(result.content, 'image', 'https://example.com/sg.jpg');
+    expectMarkdownDestination(result.content, 'link', 'https://anilist.co/studio/21');
     expect(anilist.searchStudio).toHaveBeenCalledWith(
       expect.objectContaining({ sort: 'POPULARITY_DESC' }),
     );

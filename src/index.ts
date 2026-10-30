@@ -23,6 +23,7 @@ await createApp({
   tools: allToolDefinitions,
   resources: allResourceDefinitions,
   prompts: allPromptDefinitions,
+  skills: 'skills',
   instructions:
     'Search anime and manga through anime_search_media to discover AniList IDs, then use anime_get_media for detail, anime_get_relations for a depth-bounded relation graph with heuristic ordering, anime_get_schedule for airing dates, and anime_find_characters for cast or voice actors. Media and character full_text: true retrieves complete domain JSON on the current page. Seasonal rankings and season/year ranking filters apply only to ANIME. AniList and MAL scores remain separate, and adult content requires include_adult: true. AniList, Jikan, and Kitsu supply the data; requests are paced for AniList at 30 starts per 30 seconds and Jikan at least 350 milliseconds apart.',
 });

@@ -4,7 +4,7 @@
  */
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { mcpTest } from '@cyanheads/mcp-ts-core/testing/vitest';
-import { expect } from 'vitest';
+import { expect, vi } from 'vitest';
 import { getMediaFull, searchMedia } from '@/services/jikan/jikan-service.js';
 
 mcpTest('forwards search pagination and returns upstream results', async ({ fetchMock }) => {
@@ -53,5 +53,36 @@ mcpTest(
       code: JsonRpcErrorCode.ServiceUnavailable,
     });
     expect(fetchMock.calls).toHaveLength(1);
+  },
+);
+
+mcpTest(
+  'recommendation retry backoff exits with the caller reason and no second fetch',
+  async ({ fetchMock }) => {
+    vi.resetModules();
+    const { getRecommendations, shutdownJikan } = await import('@/services/jikan/jikan-service.js');
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    fetchMock.route({
+      match: /api\.jikan\.moe/,
+      respond: new Response('rate limited', { status: 429, headers: { 'Retry-After': '1' } }),
+    });
+    try {
+      const pending = getRecommendations(1, 'MANGA', { signal: controller.signal });
+      const reason = new DOMException('cancel Jikan retry', 'AbortError');
+      const assertion = expect(pending).rejects.toBe(reason);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchMock.calls).toHaveLength(1);
+      expect(fetchMock.calls[0]!.request.url).toBe(
+        'https://api.jikan.moe/v4/manga/1/recommendations',
+      );
+      controller.abort(reason);
+      await vi.advanceTimersByTimeAsync(10000);
+      await assertion;
+      expect(fetchMock.calls).toHaveLength(1);
+    } finally {
+      shutdownJikan();
+      vi.useRealTimers();
+    }
   },
 );

@@ -5,15 +5,16 @@
 
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
+import { escapeMarkdownInline as escapeProviderText } from '@cyanheads/mcp-ts-core/utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeGetRankings } from '@/mcp-server/tools/definitions/anime-get-rankings.tool.js';
-import { escapeProviderText } from '@/mcp-server/tools/render-text.js';
 import {
   PAGE_DEPTH_EDGE_NOTICE,
   PAGE_DEPTH_RECOVERY,
   toPageDepthError,
 } from '@/services/anilist/pagination.js';
 import type { MediaNode, MediaPage } from '@/services/anilist/types.js';
+import { expectLiteralProse, expectMarkdownDestination } from '../helpers/markdown.js';
 
 vi.mock('@/services/anilist/anilist-service.js');
 
@@ -62,9 +63,8 @@ describe('animeGetRankings', () => {
     });
     const result = await runToolContract(animeGetRankings, { media_type: 'ANIME', mode: 'top' });
     expect(result.structuredContent).toMatchObject({ entries: [{ title }] });
-    expect(JSON.stringify(result.content)).toContain(
-      '&#42;&#91;title&#93;&#42;&#13;&#10;&#60;script&#62;',
-    );
+    expectLiteralProse(result.content, title);
+    expectMarkdownDestination(result.content, 'image', 'https://example.com/cover.jpg');
   });
 
   it('returns top rankings with rank positions starting from 1', async () => {

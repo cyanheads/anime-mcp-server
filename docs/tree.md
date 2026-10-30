@@ -1,6 +1,6 @@
 # anime-mcp-server - Directory Structure
 
-Generated on: 2026-10-13 13:00:04
+Generated on: 2026-10-30 09:11:01
 
 ```text
 anime-mcp-server/
@@ -39,6 +39,8 @@ anime-mcp-server/
 │   ├── add-resource/
 │   │   └── SKILL.md
 │   ├── add-service/
+│   │   └── SKILL.md
+│   ├── add-skill/
 │   │   └── SKILL.md
 │   ├── add-test/
 │   │   └── SKILL.md
@@ -136,6 +138,9 @@ anime-mcp-server/
 │   ├── prune-musl-packages.ts
 │   ├── release-github.ts
 │   └── tree.ts
+├── skills/
+│   └── anime-guide/
+│       └── SKILL.md
 ├── src/
 │   ├── mcp-server/
 │   │   ├── prompts/
@@ -172,6 +177,8 @@ anime-mcp-server/
 │   │       └── types.ts
 │   └── index.ts
 ├── tests/
+│   ├── helpers/
+│   │   └── markdown.ts
 │   ├── prompts/
 │   ├── resources/
 │   │   └── anime-media.resource.test.ts
@@ -185,6 +192,7 @@ anime-mcp-server/
 │   │   ├── anime-find-characters.tool.test.ts
 │   │   ├── anime-get-media.tool.test.ts
 │   │   ├── anime-get-rankings.tool.test.ts
+│   │   ├── anime-get-recommendations.contract.test.ts
 │   │   ├── anime-get-recommendations.tool.test.ts
 │   │   ├── anime-get-relations.tool.test.ts
 │   │   ├── anime-get-schedule.tool.test.ts
@@ -194,6 +202,7 @@ anime-mcp-server/
 │   │   ├── input-boundaries.test.ts
 │   │   └── render-text.test.ts
 │   ├── description-contract.test.ts
+│   ├── packaging-agent-docs.test.ts
 │   └── session-mode.test.ts
 ├── .dockerignore
 ├── .env.example
@@ -210,7 +219,9 @@ anime-mcp-server/
 ├── Dockerfile
 ├── LICENSE
 ├── manifest.json
+├── mcp.json
 ├── package.json
+├── plugin.json
 ├── README.md
 ├── server.json
 ├── tsconfig.build.json

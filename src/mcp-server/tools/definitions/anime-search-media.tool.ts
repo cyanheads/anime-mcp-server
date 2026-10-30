@@ -8,6 +8,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { markdownImage, escapeMarkdownInline as text } from '@cyanheads/mcp-ts-core/utils';
 import * as anilist from '@/services/anilist/anilist-service.js';
 import {
   exactResultCount,
@@ -18,7 +19,6 @@ import {
 } from '@/services/anilist/pagination.js';
 import type { MediaNode, MediaType } from '@/services/anilist/types.js';
 import * as jikan from '@/services/jikan/jikan-service.js';
-import { summaryView } from '../render-text.js';
 
 const MediaTypeEnum = z.enum(['ANIME', 'MANGA']).describe('Media type to search: anime or manga.');
 const SeasonEnum = z
@@ -405,7 +405,6 @@ export const animeSearchMedia = tool('anime_search_media', {
   },
 
   format: (result) => {
-    result = summaryView(result);
     if (result.results.length === 0) {
       return [
         { type: 'text', text: `No results found (source: ${result.source}, page ${result.page}).` },
@@ -420,15 +419,15 @@ export const animeSearchMedia = tool('anime_search_media', {
     for (const r of result.results) {
       const title = r.title_english ?? r.title_romaji ?? r.title_native ?? 'Unknown';
       const score = r.mean_score !== null ? ` · Score: ${r.mean_score}/100` : '';
-      const fmt = r.format ? ` · ${r.format}` : '';
-      const status = r.status ? ` · ${r.status}` : '';
+      const fmt = r.format ? ` · ${text(r.format)}` : '';
+      const status = r.status ? ` · ${text(r.status)}` : '';
       const ep =
         r.type === 'ANIME' && r.episodes !== null
           ? ` · ${r.episodes} eps`
           : r.type === 'MANGA' && r.chapters !== null
             ? ` · ${r.chapters} ch`
             : '';
-      const season = r.season ? ` · ${r.season}` : '';
+      const season = r.season ? ` · ${text(r.season)}` : '';
       const adult = r.is_adult ? ' · [Adult]' : '';
       const ids =
         r.id > 0
@@ -436,14 +435,16 @@ export const animeSearchMedia = tool('anime_search_media', {
           : r.id_mal !== null
             ? `[MAL:${r.id_mal}]`
             : '';
-      const native = r.title_native ? ` (${r.title_native})` : '';
-      const img = r.cover_image_url ? ` | cover_image_url: ${r.cover_image_url}` : '';
+      const native = r.title_native ? ` (${text(r.title_native)})` : '';
+      const img = r.cover_image_url
+        ? ` | cover_image_url: ${markdownImage('cover', r.cover_image_url)}`
+        : '';
 
       const chap = r.chapters !== null ? ` chapters:${r.chapters}` : '';
-      const typeLabel = ` type:${r.type}`;
-      const romaji = r.title_romaji ? ` title_romaji:${r.title_romaji}` : '';
+      const typeLabel = ` type:${text(r.type)}`;
+      const romaji = r.title_romaji ? ` title_romaji:${text(r.title_romaji)}` : '';
       lines.push(
-        `**${title}**${native} ${ids}${fmt}${status}${score}${ep}${chap}${season}${adult}${typeLabel}${romaji}${img}`,
+        `**${text(title)}**${native} ${ids}${fmt}${status}${score}${ep}${chap}${season}${adult}${typeLabel}${romaji}${img}`,
       );
     }
 

@@ -6,9 +6,9 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { markdownImage, escapeMarkdownInline as text } from '@cyanheads/mcp-ts-core/utils';
 import * as anilist from '@/services/anilist/anilist-service.js';
 import type { MediaNode, MediaRelationEdge, MediaRelationType } from '@/services/anilist/types.js';
-import { summaryView } from '../render-text.js';
 
 /** Relation priority for the presentation heuristic. Lower sorts earlier. */
 const RELATION_ORDER: Record<string, number> = {
@@ -268,7 +268,6 @@ export const animeGetRelations = tool('anime_get_relations', {
   },
 
   format: (result) => {
-    result = summaryView(result);
     const lines: string[] = [
       `## Franchise Relations (root: AL:${result.root_id})`,
       'Relation-priority/year heuristic; not a topological chronology.',
@@ -293,19 +292,25 @@ export const animeGetRelations = tool('anime_get_relations', {
             : e.chapters !== null
               ? ` · ${e.chapters} ch`
               : '';
-        const rel = e.is_root ? ' ← ROOT' : e.relation_to_root ? ` [${e.relation_to_root}]` : '';
-        const typeLabel = e.type ? ` type:${e.type}` : '';
-        const fmt = e.format ? ` fmt:${e.format}` : '';
-        const status = e.status ? ` status:${e.status}` : '';
-        const season = e.season ? ` season:${e.season}` : '';
+        const rel = e.is_root
+          ? ' ← ROOT'
+          : e.relation_to_root
+            ? ` [${text(e.relation_to_root)}]`
+            : '';
+        const typeLabel = e.type ? ` type:${text(e.type)}` : '';
+        const fmt = e.format ? ` fmt:${text(e.format)}` : '';
+        const status = e.status ? ` status:${text(e.status)}` : '';
+        const season = e.season ? ` season:${text(e.season)}` : '';
         const seasonYear = e.season_year !== null ? ` season_year:${e.season_year}` : '';
         const adult = e.is_adult ? ' [Adult]' : '';
-        const cover = e.cover_image_url ? ` cover:${e.cover_image_url}` : '';
+        const cover = e.cover_image_url
+          ? ` cover:${markdownImage('cover', e.cover_image_url)}`
+          : '';
         const malId = e.id_mal !== null ? `/MAL:${e.id_mal}` : '';
         const chap = e.chapters !== null ? ` chapters:${e.chapters}` : '';
         lines.push(
-          `${i + 1}. **${title}** (${e.title ?? '?'}) [AL:${e.id}${malId}]${typeLabel}${fmt}${status}${score}${ep}${chap}${season}${seasonYear}${adult}${rel}`,
-          `   relation_to_root: ${e.relation_to_root ?? 'none'} | depth: ${e.depth} | parent_id: ${e.parent_id ?? 'none'} | relation_to_parent: ${e.relation_to_parent ?? 'none'} | path: ${e.path.join(' → ')} | is_root: ${e.is_root} | is_adult: ${e.is_adult}${cover}`,
+          `${i + 1}. **${text(title)}** (${text(e.title ?? '?')}) [AL:${e.id}${malId}]${typeLabel}${fmt}${status}${score}${ep}${chap}${season}${seasonYear}${adult}${rel}`,
+          `   relation_to_root: ${text(e.relation_to_root ?? 'none')} | depth: ${e.depth} | parent_id: ${e.parent_id ?? 'none'} | relation_to_parent: ${text(e.relation_to_parent ?? 'none')} | path: ${e.path.join(' → ')} | is_root: ${e.is_root} | is_adult: ${e.is_adult}${cover}`,
         );
       }
     }
@@ -315,19 +320,21 @@ export const animeGetRelations = tool('anime_get_relations', {
       for (const e of supplementary) {
         const title = e.title_english ?? e.title ?? 'Unknown';
         const score = e.mean_score !== null ? ` (${e.mean_score}/100)` : '';
-        const fmt = e.format ? ` fmt:${e.format}` : '';
-        const rel = e.relation_to_root ? ` [${e.relation_to_root}]` : '';
-        const typeLabel = e.type ? ` type:${e.type}` : '';
-        const status = e.status ? ` status:${e.status}` : '';
-        const season = e.season ? ` season:${e.season}` : '';
+        const fmt = e.format ? ` fmt:${text(e.format)}` : '';
+        const rel = e.relation_to_root ? ` [${text(e.relation_to_root)}]` : '';
+        const typeLabel = e.type ? ` type:${text(e.type)}` : '';
+        const status = e.status ? ` status:${text(e.status)}` : '';
+        const season = e.season ? ` season:${text(e.season)}` : '';
         const seasonYear = e.season_year !== null ? ` season_year:${e.season_year}` : '';
         const adult = e.is_adult ? ' [Adult]' : '';
-        const cover = e.cover_image_url ? ` cover:${e.cover_image_url}` : '';
+        const cover = e.cover_image_url
+          ? ` cover:${markdownImage('cover', e.cover_image_url)}`
+          : '';
         const malId = e.id_mal !== null ? `/MAL:${e.id_mal}` : '';
         const chap = e.chapters !== null ? ` chapters:${e.chapters}` : '';
         lines.push(
-          `- **${title}** (${e.title ?? '?'}) [AL:${e.id}${malId}]${typeLabel}${fmt}${status}${score}${chap}${season}${seasonYear}${adult}${rel}`,
-          `  relation_to_root: ${e.relation_to_root ?? 'none'} | depth: ${e.depth} | parent_id: ${e.parent_id ?? 'none'} | relation_to_parent: ${e.relation_to_parent ?? 'none'} | path: ${e.path.join(' → ')} | is_root: ${e.is_root} | is_adult: ${e.is_adult}${cover}`,
+          `- **${text(title)}** (${text(e.title ?? '?')}) [AL:${e.id}${malId}]${typeLabel}${fmt}${status}${score}${chap}${season}${seasonYear}${adult}${rel}`,
+          `  relation_to_root: ${text(e.relation_to_root ?? 'none')} | depth: ${e.depth} | parent_id: ${e.parent_id ?? 'none'} | relation_to_parent: ${text(e.relation_to_parent ?? 'none')} | path: ${e.path.join(' → ')} | is_root: ${e.is_root} | is_adult: ${e.is_adult}${cover}`,
         );
       }
     }

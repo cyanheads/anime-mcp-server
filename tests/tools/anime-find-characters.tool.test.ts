@@ -5,15 +5,16 @@
 
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
+import { escapeMarkdownInline as escapeProviderText } from '@cyanheads/mcp-ts-core/utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeFindCharacters } from '@/mcp-server/tools/definitions/anime-find-characters.tool.js';
-import { escapeProviderText } from '@/mcp-server/tools/render-text.js';
 import type {
   CharacterEdge,
   CharacterWithMedia,
   MediaNode,
   StaffWithRoles,
 } from '@/services/anilist/types.js';
+import { expectLiteralProse, expectMarkdownDestination } from '../helpers/markdown.js';
 
 vi.mock('@/services/anilist/anilist-service.js');
 
@@ -125,6 +126,51 @@ describe('animeFindCharacters', () => {
   beforeEach(() => {
     vi.resetAllMocks();
   });
+
+  it.each(['by_media', 'by_character', 'by_voice_actor'] as const)(
+    'preserves hostile names and destinations in %s',
+    async (mode) => {
+      const name = '*[name]*\r\n## injected\n<script>';
+      const url = 'https://example.com/a_b.jpg?x=1&y=2#image';
+      vi.mocked(anilist.getMediaCharacters).mockResolvedValue({
+        ...mockCharacterEdges,
+        characters: [
+          {
+            ...mockCharacterEdges.characters[0]!,
+            node: {
+              ...mockCharacterEdges.characters[0]!.node,
+              name: { full: name, native: null },
+              image: { large: url, medium: null },
+            },
+          },
+        ],
+      });
+      vi.mocked(anilist.searchCharacter).mockResolvedValue({
+        ...mockCharacterWithMedia,
+        name: { full: name, native: null },
+        image: { large: url, medium: null },
+      });
+      vi.mocked(anilist.searchStaff).mockResolvedValue({
+        ...mockStaffWithRoles,
+        name: { full: name, native: null },
+        image: { large: url, medium: null },
+      });
+      const input =
+        mode === 'by_media'
+          ? { id: 11757 }
+          : mode === 'by_character'
+            ? { character_name: 'name' }
+            : { voice_actor_name: 'name' };
+      const result = await runToolContract(animeFindCharacters, input);
+      expect(result.isError).toBeFalsy();
+      expect(JSON.stringify(result.structuredContent)).toContain(JSON.stringify(name).slice(1, -1));
+      expectLiteralProse(result.content, name);
+      expectMarkdownDestination(result.content, 'image', url);
+      expect((result.content[0] as { text: string }).text).toContain(
+        `![${mode === 'by_voice_actor' ? 'voice actor' : 'character'}](<${url}>)`,
+      );
+    },
+  );
 
   it('describes an identity-only character as zero appearances and preserves full-text retrieval', async () => {
     vi.mocked(anilist.searchCharacter).mockResolvedValue({

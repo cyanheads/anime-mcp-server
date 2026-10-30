@@ -5,9 +5,9 @@
 
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
+import { escapeMarkdownInline as escapeProviderText } from '@cyanheads/mcp-ts-core/utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeGetMedia } from '@/mcp-server/tools/definitions/anime-get-media.tool.js';
-import { escapeProviderText } from '@/mcp-server/tools/render-text.js';
 import type { MediaDetail } from '@/services/anilist/types.js';
 import type { JikanMedia } from '@/services/jikan/types.js';
 import type { KitsuStreamingResult } from '@/services/kitsu/types.js';

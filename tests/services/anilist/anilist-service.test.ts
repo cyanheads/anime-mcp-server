@@ -5,7 +5,7 @@
 
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { mcpTest } from '@cyanheads/mcp-ts-core/testing/vitest';
-import { expect } from 'vitest';
+import { expect, vi } from 'vitest';
 import {
   getMediaById,
   getMediaByMalIds,
@@ -37,6 +37,36 @@ const mediaNode = {
   title: { romaji: 'Cowboy Bebop', english: 'Cowboy Bebop', native: 'カウボーイビバップ' },
   coverImage: { extraLarge: null, large: null, medium: null, color: null },
 };
+
+mcpTest(
+  'recommendation retry backoff preserves caller cancellation without a second fetch',
+  async ({ fetchMock }) => {
+    vi.resetModules();
+    const { getRecommendations, shutdownAniList } = await import(
+      '@/services/anilist/anilist-service.js'
+    );
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    fetchMock.route({
+      match: /graphql\.anilist\.co/,
+      respond: new Response('rate limited', { status: 429, headers: { 'Retry-After': '1' } }),
+    });
+    try {
+      const pending = getRecommendations({ mediaId: 1, signal: controller.signal });
+      const reason = new DOMException('cancel AniList retry', 'AbortError');
+      const assertion = expect(pending).rejects.toBe(reason);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchMock.calls).toHaveLength(1);
+      controller.abort(reason);
+      await vi.advanceTimersByTimeAsync(30000);
+      await assertion;
+      expect(fetchMock.calls).toHaveLength(1);
+    } finally {
+      shutdownAniList();
+      vi.useRealTimers();
+    }
+  },
+);
 
 mcpTest(
   'upcoming schedules request TIME ordering before selecting each page',

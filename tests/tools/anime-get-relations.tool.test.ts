@@ -8,6 +8,7 @@ import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testi
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeGetRelations } from '@/mcp-server/tools/definitions/anime-get-relations.tool.js';
 import type { MediaDetail, MediaNode, MediaRelationEdge } from '@/services/anilist/types.js';
+import { expectLiteralProse, expectMarkdownDestination } from '../helpers/markdown.js';
 
 vi.mock('@/services/anilist/anilist-service.js');
 
@@ -71,9 +72,8 @@ describe('animeGetRelations', () => {
       depth_reached: 0,
       entries: [{ title, parent_id: null, path: [11757] }],
     });
-    expect(JSON.stringify(result.content)).toContain(
-      '&#42;&#91;title&#93;&#42;&#13;&#10;&#60;script&#62;',
-    );
+    expectLiteralProse(result.content, title);
+    expectMarkdownDestination(result.content, 'image', 'https://example.com/cover.jpg');
   });
 
   it('never fetches boundary nodes or admits grandchildren beyond the requested depth', async () => {

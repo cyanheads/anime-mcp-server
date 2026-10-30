@@ -58,7 +58,11 @@ export function shutdownAniList(): void {
  * `page_depth_exceeded` ValidationError; every other HTTP failure keeps the
  * `fetchWithTimeout` classification.
  */
-function query<T>(gql: string, variables: Record<string, unknown>): Promise<T> {
+function query<T>(
+  gql: string,
+  variables: Record<string, unknown>,
+  callerSignal?: AbortSignal,
+): Promise<T> {
   return withRetry(
     ({ signal }) =>
       pacer.run(
@@ -97,6 +101,7 @@ function query<T>(gql: string, variables: Record<string, unknown>): Promise<T> {
       maxDelayMs: 30_000,
       operation: 'anilist-query',
       context: REQUEST_CONTEXT,
+      ...(callerSignal ? { signal: callerSignal } : {}),
     },
   );
 }
@@ -186,7 +191,11 @@ export async function searchMedia(params: {
 }
 
 /** Get full detail for one media item by AniList ID. Returns null if not found. */
-export async function getMediaById(id: number, includeAdult = false): Promise<MediaDetail | null> {
+export async function getMediaById(
+  id: number,
+  includeAdult = false,
+  signal?: AbortSignal,
+): Promise<MediaDetail | null> {
   const gql = `
     query GetMedia($id: Int, $isAdult: Boolean) {
       Media(id: $id, isAdult: $isAdult) { ${MEDIA_DETAIL_FRAGMENT} }
@@ -194,10 +203,14 @@ export async function getMediaById(id: number, includeAdult = false): Promise<Me
   `;
 
   try {
-    const data = await query<{ Media: MediaDetail | null }>(gql, {
-      id,
-      isAdult: includeAdult ? undefined : false,
-    });
+    const data = await query<{ Media: MediaDetail | null }>(
+      gql,
+      {
+        id,
+        isAdult: includeAdult ? undefined : false,
+      },
+      signal,
+    );
     return data.Media
       ? { ...data.Media, description: normalizeAniListDescription(data.Media.description) }
       : null;
@@ -464,6 +477,7 @@ export async function getMediaByMalIds(
   malIds: number[],
   mediaType: MediaType,
   includeAdult: boolean,
+  signal?: AbortSignal,
 ): Promise<Map<number, MediaNode>> {
   const idMalIn = [...new Set(malIds)].filter((id) => id > 0);
   if (idMalIn.length === 0) return new Map();
@@ -476,11 +490,15 @@ export async function getMediaByMalIds(
     }
   `;
 
-  const data = await query<{ Page: { media: MediaNode[] } }>(gql, {
-    idMalIn,
-    type: mediaType,
-    isAdult: includeAdult ? undefined : false,
-  });
+  const data = await query<{ Page: { media: MediaNode[] } }>(
+    gql,
+    {
+      idMalIn,
+      type: mediaType,
+      isAdult: includeAdult ? undefined : false,
+    },
+    signal,
+  );
   const mediaByMalId = new Map<number, MediaNode>();
   for (const media of data.Page.media) {
     if (media.idMal !== null) mediaByMalId.set(media.idMal, media);
@@ -493,6 +511,7 @@ export async function getRecommendations(params: {
   mediaId: number;
   page?: number;
   perPage?: number;
+  signal?: AbortSignal;
 }): Promise<{ nodes: RecommendationNode[]; hasNextPage: boolean }> {
   const gql = `
     query GetRecommendations($id: Int!, $page: Int, $perPage: Int) {
@@ -518,11 +537,15 @@ export async function getRecommendations(params: {
           nodes: RecommendationNode[];
         };
       } | null;
-    }>(gql, {
-      id: params.mediaId,
-      page: params.page ?? 1,
-      perPage: Math.min(params.perPage ?? 25, 25),
-    });
+    }>(
+      gql,
+      {
+        id: params.mediaId,
+        page: params.page ?? 1,
+        perPage: Math.min(params.perPage ?? 25, 25),
+      },
+      params.signal,
+    );
 
     if (!data.Media) return { nodes: [], hasNextPage: false };
 

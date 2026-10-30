@@ -7,6 +7,7 @@ import { mcpTest } from '@cyanheads/mcp-ts-core/testing/vitest';
 import { expect } from 'vitest';
 import { animeFindCharacters } from '@/mcp-server/tools/definitions/anime-find-characters.tool.js';
 import { animeGetMedia } from '@/mcp-server/tools/definitions/anime-get-media.tool.js';
+import { expectLiteralProse, expectMarkdownDestination } from './helpers/markdown.js';
 
 mcpTest(
   'media full_text retrieves every same-page value while the default discloses cuts',
@@ -21,6 +22,8 @@ mcpTest(
             idMal: null,
             type: 'ANIME',
             title: { romaji: '*_[hostile]', english: null, native: null },
+            coverImage: { extraLarge: 'https://example.com/a_b.jpg?x=1&y=2#cover' },
+            siteUrl: 'https://anilist.co/anime/1?q=2#site',
             isAdult: false,
             description,
             tags: Array.from({ length: 12 }, (_, id) => ({
@@ -55,6 +58,13 @@ mcpTest(
     expect(bounded).toContain('7 relation details omitted');
     expect(bounded).toContain('full_text: true');
     expect(bounded).not.toContain('## *_[hostile]');
+    expectLiteralProse(summary.content, '*_[hostile]');
+    expectMarkdownDestination(
+      summary.content,
+      'image',
+      'https://example.com/a_b.jpg?x=1&y=2#cover',
+    );
+    expectMarkdownDestination(summary.content, 'link', 'https://anilist.co/anime/1?q=2#site');
   },
 );
 
@@ -127,11 +137,7 @@ mcpTest('media synopsis decodes once on both result surfaces', async ({ fetchMoc
   const result = await runToolContract(animeGetMedia, { id: 1 });
   expect(result.isError).not.toBe(true);
   expect(result.structuredContent).toMatchObject({ description: '&lt;b&gt;' });
-  expect(result.content).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({ type: 'text', text: expect.stringContaining('&#38;lt;b&#38;gt;') }),
-    ]),
-  );
+  expectLiteralProse(result.content, '&lt;b&gt;');
 });
 
 mcpTest('staff biography decodes once on both result surfaces', async ({ fetchMock }) => {
@@ -153,12 +159,5 @@ mcpTest('staff biography decodes once on both result surfaces', async ({ fetchMo
   expect(result.structuredContent).toMatchObject({
     voice_actor: { description: '&quot;bio&quot;' },
   });
-  expect(result.content).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        type: 'text',
-        text: expect.stringContaining('&#38;quot;bio&#38;quot;'),
-      }),
-    ]),
-  );
+  expectLiteralProse(result.content, '&quot;bio&quot;');
 });

@@ -6,8 +6,13 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import {
+  markdownImage,
+  markdownLink,
+  escapeMarkdownInline as text,
+} from '@cyanheads/mcp-ts-core/utils';
 import * as anilist from '@/services/anilist/anilist-service.js';
-import { fullTextJson, summaryView } from '../render-text.js';
+import { fullTextJson, headingText } from '../render-text.js';
 
 const STAFF_LANGUAGE_VALUES = [
   'JAPANESE',
@@ -420,15 +425,6 @@ export const animeFindCharacters = tool('anime_find_characters', {
     const omittedCharacters = Math.max(0, (result.voice_actor?.description?.length ?? 0) - 500);
     const omittedRoles =
       mode === 'by_voice_actor' ? Math.max(0, (result.voice_actor?.roles.length ?? 0) - 20) : 0;
-    result = summaryView({
-      ...result,
-      voice_actor: result.voice_actor
-        ? {
-            ...result.voice_actor,
-            description: result.voice_actor.description?.slice(0, 500) ?? null,
-          }
-        : null,
-    });
     const lines: string[] = [`mode: ${result.mode}`];
 
     if (mode === 'by_media') {
@@ -442,15 +438,15 @@ export const animeFindCharacters = tool('anime_find_characters', {
         );
         const mediaContext =
           c.media_id !== undefined || c.media_title !== undefined || c.media_format !== undefined
-            ? ` | media_id:${c.media_id ?? 'none'} media_title:${c.media_title ?? 'none'} media_format:${c.media_format ?? 'none'}`
+            ? ` | media_id:${c.media_id ?? 'none'} media_title:${text(c.media_title ?? 'none')} media_format:${text(c.media_format ?? 'none')}`
             : '';
         lines.push(
-          `**${c.character_name ?? 'Unknown'}** (${c.character_name_native ?? '?'}) [char_id:${c.character_id}] [${c.role}]${mediaContext}`,
-          `  image: ${c.character_image_url ?? 'none'} | site: ${c.character_site_url ?? 'none'}`,
+          `**${text(c.character_name ?? 'Unknown')}** (${text(c.character_name_native ?? '?')}) [char_id:${c.character_id}] [${text(c.role)}]${mediaContext}`,
+          `  image: ${c.character_image_url ? markdownImage('character', c.character_image_url) : 'none'} | site: ${c.character_site_url ? markdownLink('character', c.character_site_url) : 'none'}`,
         );
         for (const v of c.voice_actors) {
           lines.push(
-            `  VA: ${v.va_name ?? '?'} (${v.va_name_native ?? '?'}) (${v.language ?? '?'}) [va_id:${v.va_id}] image:${v.va_image_url ?? 'none'} site:${v.va_site_url ?? 'none'}`,
+            `  VA: ${text(v.va_name ?? '?')} (${text(v.va_name_native ?? '?')}) (${text(v.language ?? '?')}) [va_id:${v.va_id}] image:${v.va_image_url ? markdownImage('voice actor', v.va_image_url) : 'none'} site:${v.va_site_url ? markdownLink('voice actor', v.va_site_url) : 'none'}`,
           );
         }
       }
@@ -460,8 +456,8 @@ export const animeFindCharacters = tool('anime_find_characters', {
         lines.push('No character found.');
       } else {
         lines.push(
-          `## ${first.character_name ?? 'Unknown'} (${first.character_name_native ?? '?'}) [char_id:${first.character_id}]`,
-          `image: ${first.character_image_url ?? 'none'} | site: ${first.character_site_url ?? 'none'}`,
+          `## ${headingText(first.character_name ?? 'Unknown')} (${headingText(first.character_name_native ?? '?')}) [char_id:${first.character_id}]`,
+          `image: ${first.character_image_url ? markdownImage('character', first.character_image_url) : 'none'} | site: ${first.character_site_url ? markdownLink('character', first.character_site_url) : 'none'}`,
           '',
           `**Appears in ${result.characters.filter((entry) => entry.media_id !== undefined).length} title(s):**`,
         );
@@ -471,11 +467,11 @@ export const animeFindCharacters = tool('anime_find_characters', {
           `voice_actor_data_available: ${c.voice_actor_data_available}${c.voice_actor_data_available ? '' : ' (unavailable)'}`,
         );
         lines.push(
-          `  media_title:${c.media_title ?? 'Unknown title'} [AL:${c.media_id ?? '?'}] media_id:${c.media_id ?? 'none'} media_format:${c.media_format ?? 'none'} role:${c.role} char_id:${c.character_id}`,
+          `  media_title:${text(c.media_title ?? 'Unknown title')} [AL:${c.media_id ?? '?'}] media_id:${c.media_id ?? 'none'} media_format:${text(c.media_format ?? 'none')} role:${text(c.role)} char_id:${c.character_id}`,
         );
         for (const v of c.voice_actors) {
           lines.push(
-            `    VA: ${v.va_name ?? '?'} (${v.va_name_native ?? '?'}) (${v.language ?? '?'}) [va_id:${v.va_id}] image:${v.va_image_url ?? 'none'} site:${v.va_site_url ?? 'none'}`,
+            `    VA: ${text(v.va_name ?? '?')} (${text(v.va_name_native ?? '?')}) (${text(v.language ?? '?')}) [va_id:${v.va_id}] image:${v.va_image_url ? markdownImage('voice actor', v.va_image_url) : 'none'} site:${v.va_site_url ? markdownLink('voice actor', v.va_site_url) : 'none'}`,
           );
         }
       }
@@ -483,16 +479,16 @@ export const animeFindCharacters = tool('anime_find_characters', {
       const va = result.voice_actor;
       if (va) {
         lines.push(
-          `## ${va.va_name ?? 'Unknown'} (${va.va_name_native ?? '?'}) (VA)`,
-          `va_id:${va.va_id} | va_name:${va.va_name ?? '?'} | va_name_native:${va.va_name_native ?? '?'} | language:${va.language ?? 'unknown'}`,
-          `va_image_url:${va.va_image_url ?? 'none'} | va_site_url:${va.va_site_url ?? 'none'}`,
-          `description:${va.description ?? 'none'}${omittedCharacters > 0 ? '…' : ''}`,
+          `## ${headingText(va.va_name ?? 'Unknown')} (${headingText(va.va_name_native ?? '?')}) (VA)`,
+          `va_id:${va.va_id} | va_name:${text(va.va_name ?? '?')} | va_name_native:${text(va.va_name_native ?? '?')} | language:${text(va.language ?? 'unknown')}`,
+          `va_image_url:${va.va_image_url ? markdownImage('voice actor', va.va_image_url) : 'none'} | va_site_url:${va.va_site_url ? markdownLink('voice actor', va.va_site_url) : 'none'}`,
+          `description:${text(va.description?.slice(0, 500) ?? 'none')}${omittedCharacters > 0 ? '…' : ''}`,
           '',
           '**Roles:**',
         );
         for (const role of va.roles.slice(0, 20)) {
           lines.push(
-            `- character_name:${role.character_name ?? '?'} media_title:${role.media_title ?? 'Unknown'} character_role:${role.character_role} media_format:${role.media_format ?? '?'} [AL:${role.media_id}] media_id:${role.media_id}`,
+            `- character_name:${text(role.character_name ?? '?')} media_title:${text(role.media_title ?? 'Unknown')} character_role:${text(role.character_role)} media_format:${text(role.media_format ?? '?')} [AL:${role.media_id}] media_id:${role.media_id}`,
           );
         }
         if (omittedRoles > 0) lines.push(`${omittedRoles} roles omitted.`);
@@ -503,11 +499,11 @@ export const animeFindCharacters = tool('anime_find_characters', {
     if (mode !== 'by_voice_actor' && result.voice_actor) {
       const va = result.voice_actor;
       lines.push(
-        `va_id:${va.va_id} va_name:${va.va_name ?? '?'} va_name_native:${va.va_name_native ?? '?'} language:${va.language ?? '?'} va_image_url:${va.va_image_url ?? 'none'} va_site_url:${va.va_site_url ?? 'none'} description:${va.description ?? 'none'}${omittedCharacters > 0 ? '…' : ''}`,
+        `va_id:${va.va_id} va_name:${text(va.va_name ?? '?')} va_name_native:${text(va.va_name_native ?? '?')} language:${text(va.language ?? '?')} va_image_url:${va.va_image_url ? markdownImage('voice actor', va.va_image_url) : 'none'} va_site_url:${va.va_site_url ? markdownLink('voice actor', va.va_site_url) : 'none'} description:${text(va.description?.slice(0, 500) ?? 'none')}${omittedCharacters > 0 ? '…' : ''}`,
       );
       for (const role of va.roles) {
         lines.push(
-          `role: media_id:${role.media_id} media_title:${role.media_title ?? '?'} media_format:${role.media_format ?? '?'} character_role:${role.character_role} character_name:${role.character_name ?? '?'}`,
+          `role: media_id:${role.media_id} media_title:${text(role.media_title ?? '?')} media_format:${text(role.media_format ?? '?')} character_role:${text(role.character_role)} character_name:${text(role.character_name ?? '?')}`,
         );
       }
     }

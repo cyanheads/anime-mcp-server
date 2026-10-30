@@ -10,6 +10,7 @@ import {
   createPacer,
   defaultIsTransient,
   fetchWithTimeout,
+  type RetryOptions,
   requestContextService,
   withRetry,
 } from '@cyanheads/mcp-ts-core/utils';
@@ -43,6 +44,7 @@ export function shutdownJikan(): void {
 function get<T>(
   path: string,
   params?: Record<string, string | number | undefined>,
+  options?: Pick<RetryOptions, 'signal' | 'deadlineMs' | 'maxRetries'>,
 ): Promise<T | null> {
   const url = new URL(`${JIKAN_BASE}${path}`);
   if (params) {
@@ -68,6 +70,7 @@ function get<T>(
       maxDelayMs: 5000,
       operation: 'jikan-get',
       context: REQUEST_CONTEXT,
+      ...options,
       // Jikan can report missing MAL IDs as 5xx; those fail without repeated lookups.
       isTransient: (error) =>
         !(
@@ -120,8 +123,13 @@ export async function searchMedia(params: {
 export async function getRecommendations(
   malId: number,
   mediaType: 'ANIME' | 'MANGA',
+  options?: Pick<RetryOptions, 'signal' | 'deadlineMs' | 'maxRetries'>,
 ): Promise<JikanRecommendation[]> {
   const noun = mediaType === 'ANIME' ? 'anime' : 'manga';
-  const result = await get<{ data: JikanRecommendation[] }>(`/${noun}/${malId}/recommendations`);
+  const result = await get<{ data: JikanRecommendation[] }>(
+    `/${noun}/${malId}/recommendations`,
+    undefined,
+    options,
+  );
   return result?.data ?? [];
 }

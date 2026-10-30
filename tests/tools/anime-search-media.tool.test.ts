@@ -17,6 +17,7 @@ import { animeSearchMedia } from '@/mcp-server/tools/definitions/anime-search-me
 import { PAGE_DEPTH_EDGE_NOTICE } from '@/services/anilist/pagination.js';
 import type { MediaNode, MediaPage } from '@/services/anilist/types.js';
 import type { JikanPagination, JikanSearchResult } from '@/services/jikan/types.js';
+import { expectLiteralProse, expectMarkdownDestination } from '../helpers/markdown.js';
 
 // Mock the service modules at the boundary
 vi.mock('@/services/anilist/anilist-service.js');
@@ -112,9 +113,8 @@ describe('animeSearchMedia', () => {
     });
     const result = await runToolContract(animeSearchMedia, { media_type: 'ANIME', query: 'title' });
     expect(result.structuredContent).toMatchObject({ results: [{ title_romaji: title }] });
-    expect(JSON.stringify(result.content)).toContain(
-      '&#42;&#91;title&#93;&#42;&#13;&#10;&#60;script&#62;',
-    );
+    expectLiteralProse(result.content, title);
+    expectMarkdownDestination(result.content, 'image', 'https://example.com/cover.jpg');
   });
 
   it('returns AniList results when AniList has matches', async () => {

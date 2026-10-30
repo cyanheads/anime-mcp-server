@@ -13,6 +13,7 @@ import {
   toPageDepthError,
 } from '@/services/anilist/pagination.js';
 import type { AiringSchedule, MediaNode, MediaPage } from '@/services/anilist/types.js';
+import { expectLiteralProse, expectMarkdownDestination } from '../helpers/markdown.js';
 
 vi.mock('@/services/anilist/anilist-service.js');
 
@@ -83,22 +84,32 @@ describe('animeGetSchedule', () => {
     vi.resetAllMocks();
   });
 
-  it('escapes provider titles only in summaries', async () => {
-    const title = '*[title]*\r\n<script>';
-    vi.mocked(anilist.getSeasonSchedule).mockResolvedValue({
-      ...mockSeasonPage,
-      media: [{ ...mockMediaNode, title: { romaji: title, english: title, native: null } }],
-    });
-    const result = await runToolContract(animeGetSchedule, {
-      mode: 'season',
-      season: 'FALL',
-      season_year: 2024,
-    });
-    expect(result.structuredContent).toMatchObject({ entries: [{ title }] });
-    expect(JSON.stringify(result.content)).toContain(
-      '&#42;&#91;title&#93;&#42;&#13;&#10;&#60;script&#62;',
-    );
-  });
+  it.each(['season', 'upcoming'] as const)(
+    'escapes provider titles only in %s summaries',
+    async (mode) => {
+      const title = '*[title]*\r\n<script>';
+      vi.mocked(anilist.getSeasonSchedule).mockResolvedValue({
+        ...mockSeasonPage,
+        media: [{ ...mockMediaNode, title: { romaji: title, english: title, native: null } }],
+      });
+      vi.mocked(anilist.getUpcomingEpisodes).mockResolvedValue({
+        ...upcomingPage,
+        airingSchedules: [
+          {
+            ...mockAiringSchedules[0]!,
+            media: { ...mockMediaNode, title: { romaji: title, english: title, native: null } },
+          },
+        ],
+      });
+      const result = await runToolContract(animeGetSchedule, {
+        mode,
+        ...(mode === 'season' ? { season: 'FALL' as const, season_year: 2024 } : {}),
+      });
+      expect(result.structuredContent).toMatchObject({ entries: [{ title }] });
+      expectLiteralProse(result.content, title);
+      expectMarkdownDestination(result.content, 'image', 'https://example.com/cover.jpg');
+    },
+  );
 
   it('returns season schedule when mode is "season" with valid params', async () => {
     vi.mocked(anilist.getSeasonSchedule).mockResolvedValue(mockSeasonPage);

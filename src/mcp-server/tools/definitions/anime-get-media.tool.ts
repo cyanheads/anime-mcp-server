@@ -6,10 +6,15 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import {
+  markdownImage,
+  markdownLink,
+  escapeMarkdownInline as text,
+} from '@cyanheads/mcp-ts-core/utils';
 import * as anilist from '@/services/anilist/anilist-service.js';
 import * as jikan from '@/services/jikan/jikan-service.js';
 import * as kitsu from '@/services/kitsu/kitsu-service.js';
-import { fullTextJson, summaryView } from '../render-text.js';
+import { fullTextJson, headingText } from '../render-text.js';
 
 export const animeGetMedia = tool('anime_get_media', {
   description:
@@ -337,26 +342,25 @@ export const animeGetMedia = tool('anime_get_media', {
   format: (result) => {
     if (result.full_text) return [{ type: 'text', text: fullTextJson(result) }];
     const omittedCharacters = Math.max(0, (result.description?.length ?? 0) - 500);
-    result = summaryView({ ...result, description: result.description?.slice(0, 500) ?? null });
     const title = result.title.english ?? result.title.romaji ?? result.title.native ?? 'Unknown';
     const lines: string[] = [];
 
-    lines.push(`## ${title}`);
+    lines.push(`## ${headingText(title)}`);
     if (result.title.romaji && result.title.romaji !== title)
-      lines.push(`*${result.title.romaji}*`);
+      lines.push(`*${text(result.title.romaji)}*`);
     lines.push('');
 
     const meta: string[] = [];
-    if (result.format) meta.push(result.format);
-    if (result.status) meta.push(result.status);
-    if (result.season) meta.push(result.season);
+    if (result.format) meta.push(text(result.format));
+    if (result.status) meta.push(text(result.status));
+    if (result.season) meta.push(text(result.season));
     if (result.type === 'ANIME' && result.episodes) meta.push(`${result.episodes} episodes`);
     if (result.type === 'MANGA' && result.chapters) meta.push(`${result.chapters} chapters`);
-    if (result.source) meta.push(`Source: ${result.source}`);
+    if (result.source) meta.push(`Source: ${text(result.source)}`);
     if (meta.length) lines.push(meta.join(' · '), '');
 
     if (result.description) {
-      lines.push(result.description + (omittedCharacters > 0 ? '…' : ''), '');
+      lines.push(text(result.description.slice(0, 500)) + (omittedCharacters > 0 ? '…' : ''), '');
     }
 
     // Scores
@@ -374,29 +378,33 @@ export const animeGetMedia = tool('anime_get_media', {
     if (scores.length) lines.push(`**Scores:** ${scores.join(' · ')}`, '');
 
     // Genres + tags (non-spoiler)
-    if (result.genres.length) lines.push(`**Genres:** ${result.genres.join(', ')}`);
+    if (result.genres.length) lines.push(`**Genres:** ${result.genres.map(text).join(', ')}`);
     const visibleTags = result.tags.filter((t) => !t.is_spoiler && !t.is_adult).slice(0, 10);
-    if (visibleTags.length) lines.push(`**Tags:** ${visibleTags.map((t) => t.name).join(', ')}`);
+    if (visibleTags.length)
+      lines.push(`**Tags:** ${visibleTags.map((t) => text(t.name)).join(', ')}`);
     const spoilerCount = result.tags.filter((t) => t.is_spoiler).length;
     if (spoilerCount) lines.push(`*${spoilerCount} spoiler tag(s) hidden from the tag summary.*`);
     if (result.genres.length || visibleTags.length) lines.push('');
 
     // Studios
     if (result.studios.length) {
-      const mainStudios = result.studios.filter((s) => s.is_main).map((s) => s.name);
+      const mainStudios = result.studios.filter((s) => s.is_main).map((s) => text(s.name));
       if (mainStudios.length) lines.push(`**Studio(s):** ${mainStudios.join(', ')}`);
     }
 
     // Streaming links
     if (result.streaming_links.length) {
-      lines.push('', `**Streaming:** ${result.streaming_links.map((s) => s.site).join(', ')}`);
+      lines.push(
+        '',
+        `**Streaming:** ${result.streaming_links.map((s) => markdownLink(s.site, s.url)).join(', ')}`,
+      );
     }
 
     // Relations
     if (result.relations.length) {
       lines.push('', '**Relations:**');
       for (const rel of result.relations.slice(0, 10)) {
-        lines.push(`- ${rel.relation_type}: ${rel.title ?? 'Untitled'} [AL:${rel.id}]`);
+        lines.push(`- ${text(rel.relation_type)}: ${text(rel.title ?? 'Untitled')} [AL:${rel.id}]`);
       }
     }
 
@@ -408,7 +416,7 @@ export const animeGetMedia = tool('anime_get_media', {
       const countdown = days > 0 ? `${days}d ${hours % 24}h` : `${hours}h`;
       lines.push(
         '',
-        `**Next airing:** Episode ${result.next_airing.episode} in ${countdown} (${result.next_airing.airing_at_utc})`,
+        `**Next airing:** Episode ${result.next_airing.episode} in ${countdown} (${text(result.next_airing.airing_at_utc)})`,
       );
     }
 
@@ -419,8 +427,8 @@ export const animeGetMedia = tool('anime_get_media', {
       '',
       `**IDs:** ${idParts.join(' · ')} | is_adult: ${result.is_adult}`,
       `**Volumes:** ${result.volumes ?? 'N/A'} | Chapters: ${result.chapters ?? 'N/A'}`,
-      `**Cover:** ${result.cover_image_url ?? 'none'} | Banner: ${result.banner_image_url ?? 'none'}`,
-      `**Title native:** ${result.title.native ?? 'none'} | Site: ${result.site_url ?? 'none'}`,
+      `**Cover:** ${result.cover_image_url ? markdownImage('cover', result.cover_image_url) : 'none'} | Banner: ${result.banner_image_url ? markdownImage('banner', result.banner_image_url) : 'none'}`,
+      `**Title native:** ${text(result.title.native ?? 'none')} | Site: ${result.site_url ? markdownLink('site', result.site_url) : 'none'}`,
     );
 
     // Scores detail (all fields must appear)
@@ -437,7 +445,7 @@ export const animeGetMedia = tool('anime_get_media', {
         .slice(0, 5)
         .map(
           (t) =>
-            `${t.name}(cat:${t.category ?? '?'} rank:${t.rank ?? '?'} spoiler:${t.is_spoiler} is_adult:${t.is_adult})`,
+            `${text(t.name)}(cat:${text(t.category ?? '?')} rank:${t.rank ?? '?'} spoiler:${t.is_spoiler} is_adult:${t.is_adult})`,
         )
         .join(', ');
       lines.push(`**Tag detail:** ${tagDetail}`);
@@ -446,7 +454,7 @@ export const animeGetMedia = tool('anime_get_media', {
     // Studios detail (id, is_animation_studio)
     if (result.studios.length) {
       const studioDetail = result.studios
-        .map((s) => `${s.name}[id:${s.id} main:${s.is_main} anim:${s.is_animation_studio}]`)
+        .map((s) => `${text(s.name)}[id:${s.id} main:${s.is_main} anim:${s.is_animation_studio}]`)
         .join(', ');
       lines.push(`**Studio detail:** ${studioDetail}`);
     }
@@ -456,7 +464,7 @@ export const animeGetMedia = tool('anime_get_media', {
       const streamDetail = result.streaming_links
         .map(
           (s) =>
-            `${s.site}(url:${s.url} subs:${s.subs.join(',')} dubs:${s.dubs.join(',')} src:${s.source})`,
+            `${text(s.site)}(url:${markdownLink('stream', s.url)} subs:${s.subs.map(text).join(',')} dubs:${s.dubs.map(text).join(',')} src:${s.source})`,
         )
         .join(' | ');
       lines.push(`**Stream detail:** ${streamDetail}`);
@@ -468,7 +476,7 @@ export const animeGetMedia = tool('anime_get_media', {
         .slice(0, 5)
         .map(
           (r) =>
-            `${r.relation_type}:${r.title ?? '?'}[type:${r.type} fmt:${r.format} status:${r.status}]`,
+            `${text(r.relation_type)}:${text(r.title ?? '?')}[type:${text(r.type ?? 'null')} fmt:${text(r.format ?? 'null')} status:${text(r.status ?? 'null')}]`,
         )
         .join(', ');
       lines.push(`**Relation detail:** ${relDetail}`);
@@ -477,7 +485,7 @@ export const animeGetMedia = tool('anime_get_media', {
     // Next airing all fields
     if (result.next_airing) {
       lines.push(
-        `**Next airing full:** episode=${result.next_airing.episode} airing_at_utc=${result.next_airing.airing_at_utc} time_until_airing_seconds=${result.next_airing.time_until_airing_seconds}`,
+        `**Next airing full:** episode=${result.next_airing.episode} airing_at_utc=${text(result.next_airing.airing_at_utc)} time_until_airing_seconds=${result.next_airing.time_until_airing_seconds}`,
       );
     }
 
