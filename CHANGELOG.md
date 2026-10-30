@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.4.0](changelog/0.4.x/0.4.0.md) — 2026-10-30
+
+Source-specific recommendations, a caller guide, and readable tool summaries.
+
 ## [0.3.0](changelog/0.3.x/0.3.0.md) — 2026-10-13 · ⚠️ Breaking
 
 Accurate franchise relations, restored character voice actors, and complete same-page text retrieval.
