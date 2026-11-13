@@ -10,6 +10,7 @@ import { expect, vi } from 'vitest';
 const media = (id: number) => ({
   id: 100 + id,
   idMal: id,
+  countryOfOrigin: 'JP',
   type: 'ANIME',
   title: { romaji: `Title ${id}`, english: null, native: null },
   isAdult: false,

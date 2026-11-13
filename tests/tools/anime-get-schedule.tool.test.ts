@@ -24,6 +24,7 @@ const mockMediaNode: MediaNode & {
 } = {
   id: 154587,
   idMal: null,
+  countryOfOrigin: null,
   type: 'ANIME' as const,
   format: 'TV',
   status: 'RELEASING',
@@ -288,8 +289,50 @@ describe('animeGetSchedule', () => {
 
     const blocks = animeGetSchedule.format!(result);
     const text = (blocks[0] as { text: string }).text;
-    expect(text).toContain('Ep 5');
+    expect(text).toContain('Ep 5 in **1h**');
     expect(text).toContain('AL:154587');
+  });
+
+  it('renders short and elapsed countdowns while retaining exact seconds and episode totals', async () => {
+    const airingAt = 1720000000;
+    vi.mocked(anilist.getUpcomingEpisodes).mockResolvedValue({
+      hasNextPage: false,
+      airingSchedules: [
+        {
+          id: 1,
+          episode: 6,
+          airingAt,
+          timeUntilAiring: 3408,
+          media: { ...mockMediaNode, episodes: 12 },
+        },
+        {
+          id: 2,
+          episode: 1,
+          airingAt,
+          timeUntilAiring: -60,
+          media: { ...mockMediaNode, episodes: null },
+        },
+      ],
+    });
+    const result = await runToolContract(animeGetSchedule, { mode: 'upcoming' });
+    const utc = new Date(airingAt * 1000).toISOString();
+    expect(result.structuredContent).toMatchObject({
+      entries: [
+        { episodes: 12, next_episode: 6, next_airing_at_utc: utc, time_until_airing_seconds: 3408 },
+        {
+          episodes: null,
+          next_episode: 1,
+          next_airing_at_utc: utc,
+          time_until_airing_seconds: -60,
+        },
+      ],
+    });
+    const text = result.content
+      .map((block) => (block.type === 'text' ? block.text : ''))
+      .join('\n');
+    expect(text).toContain('Ep 6/12 in **56m**');
+    expect(text).toContain('Ep 1 in **0m**');
+    expect(text).toContain('time_until_airing_seconds:-60');
   });
 
   it('handles empty season schedule', async () => {

@@ -17,6 +17,7 @@ import * as anilist from '@/services/anilist/anilist-service.js';
 const rootNode: MediaNode = {
   id: 11757,
   idMal: 9253,
+  countryOfOrigin: 'JP',
   type: 'ANIME' as const,
   format: 'TV',
   status: 'FINISHED',
@@ -39,6 +40,7 @@ const rootNode: MediaNode = {
 const sequelNode: MediaNode = {
   id: 14247,
   idMal: 20911,
+  countryOfOrigin: 'JP',
   type: 'ANIME' as const,
   format: 'TV',
   status: 'FINISHED',
@@ -58,6 +60,91 @@ const sequelEdges: MediaRelationEdge[] = [{ relationType: 'SEQUEL', node: sequel
 describe('animeGetRelations', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+  });
+
+  it('rejects an adult root before fetching its graph and permits explicit opt-in', async () => {
+    vi.mocked(anilist.getMediaById).mockResolvedValue({
+      ...rootNode,
+      isAdult: true,
+    } as MediaDetail);
+    vi.mocked(anilist.getMediaRelations).mockResolvedValue([]);
+    const denied = await runToolContract(animeGetRelations, { id: 11757 });
+    expect(denied.structuredContent).toMatchObject({
+      error: { data: { reason: 'adult_content' } },
+    });
+    expect(JSON.stringify(denied.content)).toContain('include_adult');
+    expect(anilist.getMediaRelations).not.toHaveBeenCalled();
+    const allowed = await runToolContract(animeGetRelations, { id: 11757, include_adult: true });
+    expect(allowed.structuredContent).toMatchObject({ entries: [{ is_adult: true }] });
+    expect(anilist.getMediaById).toHaveBeenLastCalledWith(11757, true, expect.any(AbortSignal));
+  });
+
+  it('omits adult branches, preserves the shortest visible path and renders origin in both groups', async () => {
+    vi.mocked(anilist.getMediaById).mockResolvedValue(rootNode as MediaDetail);
+    const graph = new Map<number, MediaRelationEdge[]>([
+      [
+        11757,
+        [
+          { relationType: 'SEQUEL', node: { ...sequelNode, id: 2, isAdult: true } },
+          { relationType: 'SIDE_STORY', node: { ...sequelNode, id: 3, countryOfOrigin: 'KR' } },
+        ],
+      ],
+      [2, [{ relationType: 'SEQUEL', node: { ...sequelNode, id: 4 } }]],
+      [3, [{ relationType: 'SEQUEL', node: { ...sequelNode, id: 5, countryOfOrigin: 'CN' } }]],
+    ]);
+    vi.mocked(anilist.getMediaRelations).mockImplementation(async (id) => graph.get(id) ?? []);
+    const result = await runToolContract(animeGetRelations, { id: 11757, max_depth: 2 });
+    expect(result.structuredContent).toMatchObject({
+      total_entries: 3,
+      notice: 'Omitted 1 adult relation entry. Set include_adult: true to include adult titles.',
+    });
+    const { entries } = result.structuredContent as {
+      entries: Array<{ id: number; path: number[] }>;
+    };
+    expect(entries.map((entry) => entry.id).sort()).toEqual([11757, 3, 5]);
+    expect(entries.find((entry) => entry.id === 5)?.path).toEqual([11757, 3, 5]);
+    expect(anilist.getMediaRelations).not.toHaveBeenCalledWith(2, expect.anything());
+    expect(JSON.stringify(result.content)).toContain('country_of_origin: KR');
+    expect(JSON.stringify(result.content)).toContain('country_of_origin: CN');
+    expect(JSON.stringify(result.content)).toContain('Omitted 1 adult');
+  });
+
+  it('includes adult descendants only with opt-in and follows visible alternative paths', async () => {
+    vi.mocked(anilist.getMediaById).mockResolvedValue(rootNode as MediaDetail);
+    const graph = new Map<number, MediaRelationEdge[]>([
+      [
+        11757,
+        [
+          { relationType: 'SEQUEL', node: { ...sequelNode, id: 2, isAdult: true } },
+          { relationType: 'SIDE_STORY', node: { ...sequelNode, id: 3 } },
+        ],
+      ],
+      [2, [{ relationType: 'SEQUEL', node: { ...sequelNode, id: 4 } }]],
+      [
+        3,
+        [
+          { relationType: 'SEQUEL', node: { ...sequelNode, id: 4 } },
+          { relationType: 'OTHER', node: { ...sequelNode, id: 2, isAdult: true } },
+        ],
+      ],
+    ]);
+    vi.mocked(anilist.getMediaRelations).mockImplementation(async (id) => graph.get(id) ?? []);
+    const hidden = await animeGetRelations.handler(
+      animeGetRelations.input.parse({ id: 11757, max_depth: 2 }),
+      createMockContext({ errors: animeGetRelations.errors }),
+    );
+    expect(hidden.entries.find((entry) => entry.id === 4)?.path).toEqual([11757, 3, 4]);
+    const visible = await runToolContract(animeGetRelations, {
+      id: 11757,
+      max_depth: 2,
+      include_adult: true,
+    });
+    expect(visible.structuredContent).toMatchObject({
+      total_entries: 4,
+      entries: expect.arrayContaining([expect.objectContaining({ id: 2, is_adult: true })]),
+    });
+    expect(visible.structuredContent).not.toHaveProperty('notice');
+    expect(JSON.stringify(visible.content)).toContain('is_adult: true');
   });
 
   it('escapes provider titles only in summaries and preserves isolated-root metadata', async () => {

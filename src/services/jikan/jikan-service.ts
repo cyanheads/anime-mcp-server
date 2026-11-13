@@ -5,7 +5,8 @@
  * @module services/jikan/jikan-service
  */
 
-import { McpError } from '@cyanheads/mcp-ts-core/errors';
+import { z } from '@cyanheads/mcp-ts-core';
+import { McpError, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import {
   createPacer,
   defaultIsTransient,
@@ -14,12 +15,7 @@ import {
   requestContextService,
   withRetry,
 } from '@cyanheads/mcp-ts-core/utils';
-import type {
-  JikanMedia,
-  JikanPagination,
-  JikanRecommendation,
-  JikanSearchResult,
-} from './types.js';
+import type { JikanMedia } from './types.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -29,6 +25,44 @@ const REQUEST_CONTEXT = requestContextService.createRequestContext({ operation: 
 const MIN_INTERVAL_MS = 350;
 
 const pacer = createPacer({ name: 'jikan', minStartGapMs: MIN_INTERVAL_MS });
+type JikanRequestOptions = Pick<RetryOptions, 'signal' | 'deadlineMs' | 'maxRetries'>;
+
+const searchPageSchema = z.object({
+  data: z
+    .array(
+      z.object({
+        mal_id: z.number().int().positive(),
+        title: z.string(),
+        title_english: z
+          .string()
+          .nullish()
+          .transform((value) => value ?? null),
+        type: z.string().nullish(),
+        status: z.string().nullish(),
+        chapters: z.number().int().nullish(),
+        episodes: z.number().int().nullish(),
+        score: z.number().nullish(),
+      }),
+    )
+    .nullish(),
+  pagination: z
+    .object({
+      current_page: z.number().int().optional(),
+      has_next_page: z.boolean().optional(),
+    })
+    .nullish(),
+});
+
+const recommendationPageSchema = z.object({
+  data: z
+    .array(
+      z.object({
+        entry: z.object({ mal_id: z.number().int().positive() }),
+        votes: z.number().int(),
+      }),
+    )
+    .nullish(),
+});
 
 /** Release queued Jikan work during server shutdown. */
 export function shutdownJikan(): void {
@@ -44,7 +78,7 @@ export function shutdownJikan(): void {
 function get<T>(
   path: string,
   params?: Record<string, string | number | undefined>,
-  options?: Pick<RetryOptions, 'signal' | 'deadlineMs' | 'maxRetries'>,
+  options?: JikanRequestOptions,
 ): Promise<T | null> {
   const url = new URL(`${JIKAN_BASE}${path}`);
   if (params) {
@@ -88,9 +122,10 @@ function get<T>(
 export async function getMediaFull(
   malId: number,
   mediaType: 'ANIME' | 'MANGA',
+  options?: JikanRequestOptions,
 ): Promise<JikanMedia | null> {
   const noun = mediaType === 'ANIME' ? 'anime' : 'manga';
-  const result = await get<{ data: JikanMedia }>(`/${noun}/${malId}/full`);
+  const result = await get<{ data: JikanMedia }>(`/${noun}/${malId}/full`, undefined, options);
   return result?.data ?? null;
 }
 
@@ -98,24 +133,35 @@ export async function getMediaFull(
 export const JIKAN_SEARCH_PAGE_MAX = 25;
 
 /** Search anime or manga by query. `sfw` asks Jikan to drop adult entries. */
-export async function searchMedia(params: {
-  query: string;
-  mediaType: 'ANIME' | 'MANGA';
-  page?: number;
-  limit?: number;
-  sfw?: boolean;
-}): Promise<{ results: JikanSearchResult[]; pagination: JikanPagination | null }> {
+export async function searchMedia(
+  params: {
+    query: string;
+    mediaType: 'ANIME' | 'MANGA';
+    page?: number;
+    limit?: number;
+    sfw?: boolean;
+  },
+  options?: JikanRequestOptions,
+) {
   const noun = params.mediaType === 'ANIME' ? 'anime' : 'manga';
-  const result = await get<{ data: JikanSearchResult[]; pagination: JikanPagination }>(`/${noun}`, {
-    q: params.query,
-    page: params.page ?? 1,
-    limit: Math.min(params.limit ?? 20, JIKAN_SEARCH_PAGE_MAX),
-    sfw: params.sfw ? 'true' : undefined,
-  });
+  const raw = await get<unknown>(
+    `/${noun}`,
+    {
+      q: params.query,
+      page: params.page ?? 1,
+      limit: Math.min(params.limit ?? 20, JIKAN_SEARCH_PAGE_MAX),
+      sfw: params.sfw ? 'true' : undefined,
+    },
+    options,
+  );
+  const result = searchPageSchema.safeParse(raw);
+  if (!result.success) {
+    throw serviceUnavailable('Jikan returned invalid search data.', { retryable: false });
+  }
 
   return {
-    results: result?.data ?? [],
-    pagination: result?.pagination ?? null,
+    results: result.data.data ?? [],
+    pagination: result.data.pagination ?? null,
   };
 }
 
@@ -123,13 +169,13 @@ export async function searchMedia(params: {
 export async function getRecommendations(
   malId: number,
   mediaType: 'ANIME' | 'MANGA',
-  options?: Pick<RetryOptions, 'signal' | 'deadlineMs' | 'maxRetries'>,
-): Promise<JikanRecommendation[]> {
+  options?: JikanRequestOptions,
+): Promise<Array<{ entry: { mal_id: number }; votes: number }>> {
   const noun = mediaType === 'ANIME' ? 'anime' : 'manga';
-  const result = await get<{ data: JikanRecommendation[] }>(
-    `/${noun}/${malId}/recommendations`,
-    undefined,
-    options,
-  );
-  return result?.data ?? [];
+  const raw = await get<unknown>(`/${noun}/${malId}/recommendations`, undefined, options);
+  const result = recommendationPageSchema.safeParse(raw);
+  if (!result.success) {
+    throw serviceUnavailable('Jikan returned invalid recommendation data.', { retryable: false });
+  }
+  return result.data.data ?? [];
 }

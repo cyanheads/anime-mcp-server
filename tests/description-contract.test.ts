@@ -91,9 +91,10 @@ mcpTest(
         },
       }),
     });
-    const summary = await runToolContract(animeFindCharacters, { voice_actor_name: 'Staff' });
+    const summary = await runToolContract(animeFindCharacters, { voice_actor_id: 1, per_page: 25 });
     const full = await runToolContract(animeFindCharacters, {
-      voice_actor_name: 'Staff',
+      voice_actor_id: 1,
+      per_page: 25,
       full_text: true,
     });
     expect(summary.isError).toBeFalsy();

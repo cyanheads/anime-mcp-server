@@ -21,6 +21,9 @@ import * as jikan from '@/services/jikan/jikan-service.js';
 const sourceDetail: MediaDetail = {
   id: 11757,
   idMal: 9253,
+  countryOfOrigin: 'JP',
+  duration: null,
+  synonyms: [],
   type: 'ANIME' as const,
   format: 'TV',
   status: 'FINISHED',
@@ -60,6 +63,7 @@ const mockAnilistRecs: { nodes: RecommendationNode[]; hasNextPage: boolean } = {
       mediaRecommendation: {
         id: 9756,
         idMal: 4654,
+        countryOfOrigin: 'JP',
         type: 'ANIME' as const,
         format: 'TV',
         status: 'FINISHED',
@@ -102,6 +106,73 @@ const mockJikanRecs: JikanRecommendation[] = [
 describe('animeGetRecommendations', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+  });
+
+  it('classifies adult roots before either recommendation source is called', async () => {
+    vi.mocked(anilist.getMediaById).mockResolvedValue({ ...sourceDetail, isAdult: true });
+    vi.mocked(anilist.getRecommendations).mockResolvedValue({ nodes: [], hasNextPage: false });
+    vi.mocked(jikan.getRecommendations).mockResolvedValue([]);
+    const result = await runToolContract(animeGetRecommendations, { id: 11757 });
+    expect(result.structuredContent).toMatchObject({
+      error: { data: { reason: 'adult_content' } },
+    });
+    expect(JSON.stringify(result.content)).toContain('include_adult');
+    expect(anilist.getRecommendations).not.toHaveBeenCalled();
+    expect(jikan.getRecommendations).not.toHaveBeenCalled();
+    const allowed = await runToolContract(animeGetRecommendations, {
+      id: 11757,
+      include_adult: true,
+    });
+    expect(allowed.isError).toBeFalsy();
+    expect(anilist.getMediaById).toHaveBeenLastCalledWith(11757, true, expect.any(AbortSignal));
+  });
+
+  it.each([false, true])(
+    'filters adult recommendation rows with include_adult=%s without backfill',
+    async (include_adult) => {
+      vi.mocked(anilist.getMediaById).mockResolvedValue(sourceDetail);
+      vi.mocked(jikan.getRecommendations).mockResolvedValue([]);
+      vi.mocked(anilist.getRecommendations).mockResolvedValue({
+        nodes: [{ rating: 1, mediaRecommendation: { ...sourceDetail, id: 8861, isAdult: true } }],
+        hasNextPage: true,
+      });
+      const result = await runToolContract(animeGetRecommendations, { id: 11757, include_adult });
+      expect(result.structuredContent).toMatchObject({
+        has_next_page: true,
+        recommendations: include_adult ? [{ id: 8861, is_adult: true }] : [],
+      });
+      expect(anilist.getRecommendations).toHaveBeenCalledTimes(1);
+      if (include_adult) expect(JSON.stringify(result.content)).toContain('is_adult: true');
+      else {
+        const { notice } = result.structuredContent as { notice: string };
+        expect(notice).toContain('Omitted 1 adult recommendation');
+        expect(notice).toContain('page 2');
+        expect(JSON.stringify(result.content)).toContain('Omitted 1 adult recommendation');
+      }
+    },
+  );
+
+  it('passes adult opt-in through Jikan resolution and exposes it on both surfaces', async () => {
+    vi.mocked(anilist.getMediaById).mockResolvedValue(sourceDetail);
+    vi.mocked(jikan.getRecommendations).mockResolvedValue(mockJikanRecs);
+    vi.mocked(anilist.getMediaByMalIds).mockResolvedValue(
+      new Map([[4654, { ...sourceDetail, id: 8861, isAdult: true }]]),
+    );
+    const result = await runToolContract(animeGetRecommendations, {
+      id: 11757,
+      source: 'jikan',
+      include_adult: true,
+    });
+    expect(anilist.getMediaByMalIds).toHaveBeenCalledWith(
+      [4654],
+      'ANIME',
+      true,
+      expect.any(AbortSignal),
+    );
+    expect(result.structuredContent).toMatchObject({
+      recommendations: [{ id: 8861, is_adult: true }],
+    });
+    expect(JSON.stringify(result.content)).toContain('is_adult: true');
   });
 
   it('keeps AniList order sorted by recommendation rating and retains a zero-vote annotation', async () => {

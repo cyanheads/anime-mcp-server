@@ -8,12 +8,12 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import * as anilist from '@/services/anilist/anilist-service.js';
 import * as jikan from '@/services/jikan/jikan-service.js';
 import * as kitsu from '@/services/kitsu/kitsu-service.js';
+import { mergeStreamingLinks } from '@/services/streaming-links.js';
 
 export const animeMediaResource = resource('anime://media/{id}', {
   name: 'anime-media',
   description:
-    'Compact media record for an anime or manga by AniList ID: titles, full normalized synopsis, format, status, season, episode/chapter counts, genres, AniList/MAL scores, streaming count, cover and site URLs. Use anime_get_media for tags, studios and streaming links. ' +
-    'Use as a stable URI for injectable context about a specific title.',
+    'Compact record for a non-adult anime or manga by AniList ID: titles, full normalized synopsis, format, status, season, episode/chapter counts, genres, AniList/MAL scores, streaming count, cover and site URLs. Use anime_get_media for tags, studios, streaming links, or adult titles with include_adult: true.',
   mimeType: 'application/json',
   params: z.object({
     id: z
@@ -21,6 +21,12 @@ export const animeMediaResource = resource('anime://media/{id}', {
       .describe('AniList media ID as a string, e.g. "16498". Obtain from anime_search_media.'),
   }),
   errors: [
+    {
+      reason: 'adult_content',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'The requested title is adult content',
+      recovery: 'Call anime_get_media for the same ID with include_adult: true.',
+    },
     {
       reason: 'not_found',
       code: JsonRpcErrorCode.NotFound,
@@ -71,29 +77,33 @@ export const animeMediaResource = resource('anime://media/{id}', {
 
     ctx.log.info('Fetching anime media resource', { id: numericId });
 
-    const detail = await anilist.getMediaById(numericId);
+    const detail = await anilist.getMediaById(numericId, true, ctx.signal);
+    ctx.signal.throwIfAborted();
     if (!detail) {
       throw ctx.fail('not_found', `No media found with AniList ID ${numericId}`, { id: numericId });
     }
+    if (detail.isAdult) {
+      throw ctx.fail('adult_content', 'The requested title is adult content.');
+    }
 
-    // Fan out to supplements in parallel
+    const supplementOptions = { signal: ctx.signal, deadlineMs: 5000, maxRetries: 0 };
     const [jikanResult, kitsuResult] = await Promise.allSettled([
-      detail.idMal ? jikan.getMediaFull(detail.idMal, detail.type) : Promise.resolve(null),
+      detail.idMal ? jikan.getMediaFull(detail.idMal, detail.type, supplementOptions) : null,
       detail.type === 'ANIME' && detail.idMal
-        ? kitsu.getAnimeStreamingByMalId(detail.idMal)
-        : Promise.resolve(null),
+        ? kitsu.getAnimeStreamingByMalId(detail.idMal, supplementOptions)
+        : null,
     ]);
+    ctx.signal.throwIfAborted();
 
     const jikanData = jikanResult.status === 'fulfilled' ? jikanResult.value : null;
     const kitsuData = kitsuResult.status === 'fulfilled' ? kitsuResult.value : null;
 
-    // Count streaming links
-    let streamingCount = 0;
-    if (kitsuData?.streamingLinks?.length) {
-      streamingCount = kitsuData.streamingLinks.length;
-    } else if (detail.type === 'ANIME') {
-      streamingCount = (detail.externalLinks ?? []).filter((l) => l.type === 'STREAMING').length;
-    }
+    if (jikanResult.status === 'rejected') ctx.log.warning('Jikan MAL data is unavailable.');
+    if (kitsuResult.status === 'rejected') ctx.log.warning('Kitsu streaming data is unavailable.');
+    const streamingCount =
+      detail.type === 'ANIME'
+        ? mergeStreamingLinks(kitsuData?.streamingLinks ?? [], detail.externalLinks ?? []).length
+        : 0;
 
     const season =
       detail.season && detail.seasonYear

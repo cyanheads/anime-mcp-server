@@ -22,6 +22,9 @@ import * as kitsu from '@/services/kitsu/kitsu-service.js';
 const mockDetail: MediaDetail = {
   id: 11757,
   idMal: 9253,
+  countryOfOrigin: 'JP',
+  duration: null,
+  synonyms: [],
   type: 'ANIME' as const,
   format: 'TV',
   status: 'FINISHED',
@@ -104,6 +107,55 @@ describe('animeMediaResource', () => {
     vi.resetAllMocks();
   });
 
+  it('rejects an adult root before calling supplements and directs the caller to opt in via the tool', async () => {
+    vi.mocked(anilist.getMediaById).mockResolvedValue({ ...mockDetail, isAdult: true });
+    const ctx = createMockContext({ errors: animeMediaResource.errors });
+    await expect(animeMediaResource.handler({ id: '11757' }, ctx)).rejects.toMatchObject({
+      data: { reason: 'adult_content' },
+    });
+    expect(animeMediaResource.errors).toContainEqual(
+      expect.objectContaining({
+        reason: 'adult_content',
+        recovery: expect.stringMatching(/anime_get_media.*include_adult: true/),
+      }),
+    );
+    expect(anilist.getMediaById).toHaveBeenCalledExactlyOnceWith(11757, true, ctx.signal);
+    expect(jikan.getMediaFull).not.toHaveBeenCalled();
+    expect(kitsu.getAnimeStreamingByMalId).not.toHaveBeenCalled();
+  });
+
+  it('counts distinct usable links across both providers and applies optional budgets', async () => {
+    const link = mockDetail.externalLinks[0]!;
+    vi.mocked(anilist.getMediaById).mockResolvedValue({
+      ...mockDetail,
+      externalLinks: [
+        link,
+        { ...link, id: 2, site: 'Hulu', url: 'https://hulu.com/steins-gate' },
+        { ...link, id: 3, site: 'Disabled', url: 'https://disabled.example/a', isDisabled: true },
+        { ...link, id: 4, site: 'Invalid', url: null },
+      ],
+    });
+    vi.mocked(kitsu.getAnimeStreamingByMalId).mockResolvedValue(mockKitsuStreaming);
+    const ctx = createMockContext({ errors: animeMediaResource.errors });
+    const result = await animeMediaResource.handler({ id: '11757' }, ctx);
+    expect(result.streaming_count).toBe(2);
+    const options = { signal: ctx.signal, deadlineMs: 5000, maxRetries: 0 };
+    expect(jikan.getMediaFull).toHaveBeenCalledExactlyOnceWith(9253, 'ANIME', options);
+    expect(kitsu.getAnimeStreamingByMalId).toHaveBeenCalledExactlyOnceWith(9253, options);
+  });
+
+  it('propagates caller cancellation during resource supplements', async () => {
+    const caller = new AbortController();
+    const reason = new DOMException('caller cancelled', 'AbortError');
+    vi.mocked(anilist.getMediaById).mockResolvedValue(mockDetail);
+    vi.mocked(kitsu.getAnimeStreamingByMalId).mockImplementation(async () => {
+      caller.abort(reason);
+      throw reason;
+    });
+    const ctx = createMockContext({ errors: animeMediaResource.errors, signal: caller.signal });
+    await expect(animeMediaResource.handler({ id: '11757' }, ctx)).rejects.toBe(reason);
+  });
+
   it('preserves leading-zero decimal spelling', async () => {
     vi.mocked(anilist.getMediaById).mockResolvedValue(mockDetail);
     const result = await animeMediaResource.handler(
@@ -111,7 +163,7 @@ describe('animeMediaResource', () => {
       createMockContext({ errors: animeMediaResource.errors }),
     );
     expect(result.id).toBe(11757);
-    expect(anilist.getMediaById).toHaveBeenCalledWith(11757);
+    expect(anilist.getMediaById).toHaveBeenCalledWith(11757, true, expect.any(AbortSignal));
   });
 
   it('fills declared resource recovery through the real resource factory', async () => {
@@ -290,15 +342,16 @@ describe('animeMediaResource', () => {
   });
 
   it('skips Kitsu for manga type', async () => {
-    const mangaDetail = { ...mockDetail, type: 'MANGA' as const, idMal: 123, externalLinks: [] };
+    const mangaDetail = { ...mockDetail, type: 'MANGA' as const, idMal: 123 };
     vi.mocked(anilist.getMediaById).mockResolvedValue(mangaDetail);
     vi.mocked(jikan.getMediaFull).mockResolvedValue(null);
 
     const ctx = createMockContext({ tenantId: 'test-tenant', errors: animeMediaResource.errors });
     const params = animeMediaResource.params!.parse({ id: '11757' });
-    await animeMediaResource.handler(params, ctx);
+    const result = await animeMediaResource.handler(params, ctx);
 
     expect(vi.mocked(kitsu.getAnimeStreamingByMalId)).not.toHaveBeenCalled();
+    expect(result.streaming_count).toBe(0);
   });
 
   it('handles sparse payload: all optional fields null', async () => {

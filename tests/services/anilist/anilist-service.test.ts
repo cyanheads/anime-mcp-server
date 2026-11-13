@@ -24,6 +24,7 @@ import { PAGE_DEPTH_REASON, PAGE_DEPTH_RECOVERY } from '@/services/anilist/pagin
 const mediaNode = {
   id: 1,
   idMal: 1,
+  countryOfOrigin: 'JP',
   type: 'ANIME',
   format: 'TV',
   status: 'FINISHED',
@@ -160,6 +161,8 @@ mcpTest('getMediaById returns the AniList media detail', async ({ fetchMock }) =
         Media: {
           ...mediaNode,
           description: 'First paragraph.<br><br>Second paragraph.',
+          duration: 24,
+          synonyms: ['Bebop'],
           source: 'ORIGINAL',
           hashtag: null,
           bannerImage: null,
@@ -188,7 +191,13 @@ mcpTest('getMediaById returns the AniList media detail', async ({ fetchMock }) =
     id: 1,
     title: { romaji: 'Cowboy Bebop' },
     description: 'First paragraph.\n\nSecond paragraph.',
+    duration: 24,
+    synonyms: ['Bebop'],
+    countryOfOrigin: 'JP',
   });
+  const selection = await requestQuery(fetchMock.calls[0]!.request);
+  expect(selection).toContain('countryOfOrigin');
+  expect(selection).toContain('duration synonyms');
 });
 
 mcpTest('getMediaCharacters preserves a valid empty cast page', async ({ fetchMock }) => {

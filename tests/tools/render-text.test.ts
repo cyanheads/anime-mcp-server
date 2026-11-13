@@ -6,8 +6,27 @@
 import { escapeMarkdownInline, markdownImage, markdownLink } from '@cyanheads/mcp-ts-core/utils';
 import { Parser } from 'commonmark';
 import { describe, expect, it } from 'vitest';
-import { fullTextJson, headingText } from '@/mcp-server/tools/render-text.js';
+import {
+  formatAiringCountdown,
+  fullTextJson,
+  headingText,
+} from '@/mcp-server/tools/render-text.js';
 import { expectLiteralProse } from '../helpers/markdown.js';
+
+it.each([
+  [-61, '0m'],
+  [0, '0m'],
+  [59, '0m'],
+  [60, '1m'],
+  [3408, '56m'],
+  [3599, '59m'],
+  [3600, '1h'],
+  [86399, '23h'],
+  [86400, '1d 0h'],
+  [90000, '1d 1h'],
+])('formats a countdown of %s seconds as %s', (seconds, display) => {
+  expect(formatAiringCountdown(seconds)).toBe(display);
+});
 
 describe('provider summary boundary', () => {
   it.each([

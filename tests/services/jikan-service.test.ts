@@ -7,6 +7,59 @@ import { mcpTest } from '@cyanheads/mcp-ts-core/testing/vitest';
 import { expect, vi } from 'vitest';
 import { getMediaFull, searchMedia } from '@/services/jikan/jikan-service.js';
 
+mcpTest('detail returns null when Jikan has no data', async ({ fetchMock }) => {
+  fetchMock.route({ match: /api\.jikan\.moe/, respond: Response.json({ data: null }) });
+  await expect(getMediaFull(999, 'MANGA')).resolves.toBeNull();
+  expect(fetchMock.calls[0]!.request.url).toBe('https://api.jikan.moe/v4/manga/999/full');
+});
+
+mcpTest('optional detail fails after one rate-limited request', async ({ fetchMock }) => {
+  vi.resetModules();
+  const { getMediaFull, shutdownJikan } = await import('@/services/jikan/jikan-service.js');
+  vi.useFakeTimers();
+  fetchMock.route({
+    match: /api\.jikan\.moe/,
+    respond: () => new Response('rate limited', { status: 429, headers: { 'Retry-After': '0' } }),
+  });
+  try {
+    const pending = getMediaFull(1, 'ANIME', { deadlineMs: 5000, maxRetries: 0 });
+    const assertion = expect(pending).rejects.toMatchObject({ data: { status: 429 } });
+    await vi.advanceTimersByTimeAsync(5000);
+    await assertion;
+    expect(fetchMock.calls).toHaveLength(1);
+  } finally {
+    shutdownJikan();
+    vi.useRealTimers();
+  }
+});
+
+mcpTest(
+  'optional search deadline includes time spent in the Jikan queue',
+  async ({ fetchMock }) => {
+    vi.resetModules();
+    const { getMediaFull, searchMedia, shutdownJikan } = await import(
+      '@/services/jikan/jikan-service.js'
+    );
+    vi.useFakeTimers();
+    fetchMock.route({ match: /api\.jikan\.moe/, respond: () => Response.json({ data: null }) });
+    try {
+      const initial = getMediaFull(1, 'ANIME');
+      await vi.advanceTimersByTimeAsync(0);
+      await initial;
+      const pending = searchMedia(
+        { query: 'Bebop', mediaType: 'ANIME' },
+        { deadlineMs: 300, maxRetries: 0 },
+      ).catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(350);
+      expect(await pending).toMatchObject({ data: { reason: 'retry_deadline_exceeded' } });
+      expect(fetchMock.calls).toHaveLength(1);
+    } finally {
+      shutdownJikan();
+      vi.useRealTimers();
+    }
+  },
+);
+
 mcpTest('forwards search pagination and returns upstream results', async ({ fetchMock }) => {
   fetchMock.route({
     match: /api\.jikan\.moe/,

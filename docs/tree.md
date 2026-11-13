@@ -1,6 +1,6 @@
 # anime-mcp-server - Directory Structure
 
-Generated on: 2026-10-30 09:18:54
+Generated on: 2026-11-13 16:24:41
 
 ```text
 anime-mcp-server/
@@ -173,9 +173,10 @@ anime-mcp-server/
 │   │   ├── jikan/
 │   │   │   ├── jikan-service.ts
 │   │   │   └── types.ts
-│   │   └── kitsu/
-│   │       ├── kitsu-service.ts
-│   │       └── types.ts
+│   │   ├── kitsu/
+│   │   │   ├── kitsu-service.ts
+│   │   │   └── types.ts
+│   │   └── streaming-links.ts
 │   └── index.ts
 ├── tests/
 │   ├── helpers/
@@ -185,10 +186,13 @@ anime-mcp-server/
 │   │   └── anime-media.resource.test.ts
 │   ├── services/
 │   │   ├── anilist/
+│   │   │   ├── anilist-discovery.test.ts
 │   │   │   ├── anilist-service.test.ts
 │   │   │   └── pagination.test.ts
 │   │   ├── jikan-service.test.ts
-│   │   └── pacing.test.ts
+│   │   ├── kitsu-service.test.ts
+│   │   ├── pacing.test.ts
+│   │   └── streaming-links.test.ts
 │   ├── tools/
 │   │   ├── anime-find-characters.tool.test.ts
 │   │   ├── anime-get-media.tool.test.ts
@@ -201,6 +205,7 @@ anime-mcp-server/
 │   │   ├── anime-search-media.contract.test.ts
 │   │   ├── anime-search-media.tool.test.ts
 │   │   ├── input-boundaries.test.ts
+│   │   ├── optional-upstream.test.ts
 │   │   └── render-text.test.ts
 │   ├── description-contract.test.ts
 │   ├── packaging-agent-docs.test.ts

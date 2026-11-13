@@ -27,6 +27,7 @@ const mockStudioDetail: StudioDetail = {
         node: {
           id: 11757,
           idMal: 9253,
+          countryOfOrigin: 'JP',
           type: 'ANIME' as const,
           format: 'TV',
           status: 'FINISHED',
@@ -51,6 +52,7 @@ const mockStudioDetail: StudioDetail = {
         node: {
           id: 20787,
           idMal: 31240,
+          countryOfOrigin: 'JP',
           type: 'ANIME' as const,
           format: 'TV',
           status: 'FINISHED',
@@ -254,6 +256,7 @@ describe('animeGetStudio', () => {
             node: {
               id: 1,
               idMal: null,
+              countryOfOrigin: null,
               type: 'ANIME' as const,
               format: null,
               status: null,
@@ -289,6 +292,7 @@ describe('animeGetStudio', () => {
 const filmNode: MediaNode = {
   id: 7791,
   idMal: 6547,
+  countryOfOrigin: 'JP',
   type: 'ANIME',
   format: 'TV',
   status: 'FINISHED',
@@ -405,6 +409,81 @@ describe('animeGetStudio inputs and contracts', () => {
   // ─── #31: AniList's 25-row page and per-page dedupe ─────────────────────────
 
   describe('filmography rows', () => {
+    it.each([{ name: 'MAPPA' }, { id: 2 }])(
+      'requests main credits upstream and preserves filtered page metadata by %j',
+      async (identifier) => {
+        const lookup = 'id' in identifier ? anilist.getStudioById : anilist.searchStudio;
+        vi.mocked(lookup).mockResolvedValue(
+          studioWithCredits([credit(1, true), credit(1, true), credit(2, true)], {
+            currentPage: 2,
+            hasNextPage: true,
+            perPage: 3,
+            total: 400,
+          }),
+        );
+        const result = await runToolContract(animeGetStudio, {
+          ...identifier,
+          main_only: true,
+          page: 2,
+          per_page: 3,
+          sort: 'START_DATE_DESC',
+        });
+        expect(lookup).toHaveBeenCalledWith(
+          expect.objectContaining({
+            ...identifier,
+            mainOnly: true,
+            page: 2,
+            perPage: 3,
+            sort: 'START_DATE_DESC',
+          }),
+        );
+        expect(result.structuredContent).toMatchObject({
+          page: 2,
+          has_next_page: true,
+          total_titles: null,
+          filmography: [
+            { id: 1, is_main_studio: true },
+            { id: 2, is_main_studio: true },
+          ],
+        });
+        expect(contentText(result).match(/main studio/g)).toHaveLength(2);
+        expect(contentText(result)).toContain('More titles available (page 3)');
+      },
+    );
+
+    it.each([false, undefined])('preserves co-credits with main_only %s', async (main_only) => {
+      vi.mocked(anilist.getStudioById).mockResolvedValue(
+        studioWithCredits([credit(1, true), credit(2, false)], { total: 400 }),
+      );
+      const result = await runToolContract(animeGetStudio, { id: 2, main_only });
+      expect(anilist.getStudioById).toHaveBeenCalledWith(
+        expect.objectContaining({ mainOnly: false }),
+      );
+      expect(result.structuredContent).toMatchObject({
+        total_titles: 2,
+        filmography: [
+          { id: 1, is_main_studio: true },
+          { id: 2, is_main_studio: false },
+        ],
+      });
+      expect(contentText(result)).toContain('co-credit');
+      expect(contentText(result)).toContain('2 titles');
+    });
+
+    it.each([1, 2])('handles an empty main-credit page %i', async (page) => {
+      vi.mocked(anilist.getStudioById).mockResolvedValue(
+        studioWithCredits([], { currentPage: page, total: 400 }),
+      );
+      const result = await runToolContract(animeGetStudio, { id: 2, main_only: true, page });
+      expect(result.structuredContent).toMatchObject({
+        page,
+        has_next_page: false,
+        total_titles: page === 1 ? 0 : null,
+        filmography: [],
+      });
+      expect(contentText(result)).toContain(page === 1 ? '0 titles' : 'Page 2 is past the end');
+    });
+
     it('rejects per_page 26 at the schema', async () => {
       const result = await runToolContract(animeGetStudio, { id: 2, per_page: 26 });
 

@@ -16,7 +16,7 @@ import * as jikan from '@/services/jikan/jikan-service.js';
 
 export const animeGetRecommendations = tool('anime_get_recommendations', {
   description:
-    'Find recommendations for an AniList media ID. source anilist (default) pages AniList community recommendations and adds matching MAL vote counts when available. source jikan deduplicates the list supplied by Jikan using maximum votes, sorts by votes descending then MAL ID ascending, pages those candidates locally, and resolves up to 25 selected IDs through AniList; adult and unresolved candidates are omitted without changing candidate pagination. Jikan pages do not guarantee a global ranking or a snapshot across calls. Check source, jikan_status and has_next_page; repeat the same source, id and per_page with the next page to continue. Ratings and vote counts stay separate. Selected-source failures require retrying or switching to anilist; optional annotation failure is reported as unavailable.',
+    'Find recommendations for an AniList media ID. source anilist (default) pages AniList community recommendations and adds matching MAL vote counts when available. source jikan deduplicates the list supplied by Jikan using maximum votes, sorts by votes descending then MAL ID ascending, pages those candidates locally, and resolves up to 25 selected IDs through AniList. Adult roots and entries require include_adult: true; unresolved candidates are omitted without changing candidate pagination. Jikan pages do not guarantee a global ranking or a snapshot across calls. Check source, jikan_status and has_next_page; repeat the same source, id, per_page and include_adult with the next page to continue. Ratings and vote counts stay separate. Selected-source failures require retrying or switching to anilist; optional annotation failure is reported as unavailable.',
   annotations: { readOnlyHint: true, idempotentHint: true },
 
   input: z.object({
@@ -32,6 +32,10 @@ export const animeGetRecommendations = tool('anime_get_recommendations', {
       .min(1)
       .max(2147483647)
       .describe('AniList media ID of the title to get recommendations for.'),
+    include_adult: z
+      .boolean()
+      .default(false)
+      .describe('Include adult roots and recommendation entries. Default false.'),
     liked_aspects: z
       .string()
       .max(500)
@@ -78,7 +82,7 @@ export const animeGetRecommendations = tool('anime_get_recommendations', {
     notice: z
       .string()
       .optional()
-      .describe('Next-page guidance. Present only when the recommendations page was capped.'),
+      .describe('Next-page guidance and count of identified adult entries omitted from this page.'),
   },
 
   output: z.object({
@@ -112,6 +116,7 @@ export const animeGetRecommendations = tool('anime_get_recommendations', {
             type: z.string().nullable().describe('Media type.'),
             format: z.string().nullable().describe('Format: TV, MOVIE, OVA, etc.'),
             status: z.string().nullable().describe('Production status.'),
+            is_adult: z.boolean().describe('Whether this recommended title is adult content.'),
             mean_score: z.number().nullable().describe('AniList mean score 0–100, or null.'),
             cover_image_url: z.string().nullable().describe('Cover image URL, or null.'),
             anilist_rating: z
@@ -135,11 +140,17 @@ export const animeGetRecommendations = tool('anime_get_recommendations', {
           .describe('A recommendation entry.'),
       )
       .describe(
-        'Recommendations in selected-source order: AniList rating descending, or Jikan maximum votes descending then MAL ID ascending. Jikan-only pages omit adult/unresolved candidates and retain sources jikan with null anilist_rating.',
+        'Recommendations in selected-source order: AniList rating descending, or Jikan maximum votes descending then MAL ID ascending. Jikan-only pages omit unresolved candidates and adult candidates without opt-in, retaining sources jikan with null anilist_rating.',
       ),
   }),
 
   errors: [
+    {
+      reason: 'adult_content',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'The source title is adult content and include_adult is false',
+      recovery: 'Retry the same ID with include_adult: true to include adult titles.',
+    },
     {
       reason: 'not_found',
       code: JsonRpcErrorCode.NotFound,
@@ -175,9 +186,12 @@ export const animeGetRecommendations = tool('anime_get_recommendations', {
     // One budget includes source lookup, retries, pacing, resolution and optional annotations.
     return withRetry(
       async ({ signal }) => {
-        const mediaDetail = await anilist.getMediaById(input.id, false, signal);
+        const mediaDetail = await anilist.getMediaById(input.id, true, signal);
         if (!mediaDetail) {
           throw ctx.fail('not_found', `No media found with AniList ID ${input.id}`);
+        }
+        if (mediaDetail.isAdult && !input.include_adult) {
+          throw ctx.fail('adult_content', 'The requested recommendation source is adult content.');
         }
         const idMal = mediaDetail.idMal ?? null;
         const mediaType = mediaDetail.type;
@@ -211,8 +225,10 @@ export const animeGetRecommendations = tool('anime_get_recommendations', {
             if (err instanceof Error && err.name === 'AbortError') throw err;
             if (
               err instanceof McpError &&
-              (err.code === JsonRpcErrorCode.InvalidParams ||
-                err.code === JsonRpcErrorCode.ValidationError)
+              (err.code === JsonRpcErrorCode.RequestCancelled ||
+                (input.source === 'jikan' &&
+                  (err.code === JsonRpcErrorCode.InvalidParams ||
+                    err.code === JsonRpcErrorCode.ValidationError)))
             )
               throw err;
             if (input.source === 'jikan')
@@ -247,7 +263,7 @@ export const animeGetRecommendations = tool('anime_get_recommendations', {
               const resolved = await anilist.getMediaByMalIds(
                 selected.map(([id]) => id),
                 mediaType,
-                false,
+                input.include_adult,
                 signal,
               );
               nodes = selected.flatMap(([id]) => {
@@ -274,9 +290,14 @@ export const animeGetRecommendations = tool('anime_get_recommendations', {
           }
         }
 
+        let omittedAdultCount = 0;
         const merged = nodes.flatMap((n) => {
           if (n.mediaRecommendation === null) return [];
           const m = n.mediaRecommendation;
+          if (m.isAdult && !input.include_adult) {
+            omittedAdultCount++;
+            return [];
+          }
           const jikanVotes = m.idMal ? (jikanVoteMap.get(m.idMal) ?? null) : null;
           const sources: Array<'anilist' | 'jikan'> =
             input.source === 'jikan'
@@ -294,6 +315,7 @@ export const animeGetRecommendations = tool('anime_get_recommendations', {
               type: m.type ?? null,
               format: m.format ?? null,
               status: m.status ?? null,
+              is_adult: m.isAdult,
               mean_score: m.meanScore ?? null,
               cover_image_url: m.coverImage?.large ?? null,
               anilist_rating: n.rating ?? null,
@@ -307,13 +329,21 @@ export const animeGetRecommendations = tool('anime_get_recommendations', {
         if (input.source === 'anilist')
           merged.sort((a, b) => (b.anilist_rating ?? 0) - (a.anilist_rating ?? 0));
 
+        const notices: string[] = [];
+        if (omittedAdultCount)
+          notices.push(
+            `Omitted ${omittedAdultCount} adult recommendation ${omittedAdultCount === 1 ? 'entry' : 'entries'}. Set include_adult: true to include adult titles.`,
+          );
         if (hasNextPage) {
+          const guidance = `More recommendations are available. Call anime_get_recommendations with page ${input.page + 1}, source ${input.source}, the same id, and the same per_page${input.include_adult ? ', retaining include_adult: true,' : ''} to continue.`;
           ctx.enrich.truncated({
             shown: merged.length,
             cap: input.per_page,
-            guidance: `More recommendations are available. Call anime_get_recommendations with page ${input.page + 1}, source ${input.source}, the same id, and the same per_page to continue.`,
+            guidance,
           });
+          notices.push(guidance);
         }
+        if (notices.length) ctx.enrich.notice(notices.join(' '));
 
         return {
           source: input.source,
@@ -363,7 +393,7 @@ export const animeGetRecommendations = tool('anime_get_recommendations', {
       const sources = rec.sources.join('+');
       lines.push(
         `**${text(title)}** (${text(rec.title ?? '?')}) [AL:${rec.id}${rec.id_mal !== null ? `/MAL:${rec.id_mal}` : ''}] type:${text(rec.type ?? 'N/A')}${fmt}${score}${alRating}${jVotes} _(${sources})_`,
-        `  status: ${text(rec.status ?? 'N/A')} | cover: ${rec.cover_image_url ? markdownImage('cover', rec.cover_image_url) : 'none'}`,
+        `  status: ${text(rec.status ?? 'N/A')} | is_adult: ${rec.is_adult} | cover: ${rec.cover_image_url ? markdownImage('cover', rec.cover_image_url) : 'none'}`,
       );
     }
 

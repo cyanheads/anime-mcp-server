@@ -14,7 +14,7 @@ import {
   PAGE_DEPTH_EDGE_NOTICE,
   pastEndNotice,
 } from '@/services/anilist/pagination.js';
-import { headingText } from '../render-text.js';
+import { formatAiringCountdown, headingText } from '../render-text.js';
 
 const SeasonEnum = z
   .enum(['WINTER', 'SPRING', 'SUMMER', 'FALL'])
@@ -329,12 +329,11 @@ export const animeGetSchedule = tool('anime_get_schedule', {
 
       if (result.mode === 'upcoming' && entry.next_airing_at_utc) {
         const seconds = entry.time_until_airing_seconds ?? 0;
-        const hours = Math.floor(seconds / 3600);
-        const days = Math.floor(hours / 24);
-        const countdown = days > 0 ? `${days}d ${hours % 24}h` : `${hours}h`;
+        const countdown = formatAiringCountdown(seconds);
+        const episodeTotal = entry.episodes === null ? '' : `/${entry.episodes}`;
         lines.push(
           `**${text(displayTitle)}** [AL:${entry.id}]${fmt}${score}${status}${titleRomaji}`,
-          `  Ep ${entry.next_episode} in **${countdown}** — ${text(entry.next_airing_at_utc)} (time_until_airing_seconds:${entry.time_until_airing_seconds ?? 0})${cover}`,
+          `  Ep ${entry.next_episode}${episodeTotal} in **${countdown}** — ${text(entry.next_airing_at_utc)} (time_until_airing_seconds:${seconds})${cover}`,
         );
       } else {
         const ep = entry.episodes !== null ? ` · ${entry.episodes} eps` : '';

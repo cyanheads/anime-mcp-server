@@ -7,8 +7,12 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { markdownImage, escapeMarkdownInline as text } from '@cyanheads/mcp-ts-core/utils';
+import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
+import {
+  markdownImage,
+  escapeMarkdownInline as text,
+  withRetry,
+} from '@cyanheads/mcp-ts-core/utils';
 import * as anilist from '@/services/anilist/anilist-service.js';
 import {
   exactResultCount,
@@ -50,6 +54,7 @@ function toResult(m: MediaNode) {
     title_english: m.title.english,
     title_native: m.title.native,
     type: m.type,
+    country_of_origin: m.countryOfOrigin ?? null,
     format: m.format ?? null,
     status: m.status ?? null,
     season: m.season && m.seasonYear ? `${m.season} ${m.seasonYear}` : (m.season ?? null),
@@ -66,31 +71,46 @@ function toResult(m: MediaNode) {
  * lookup resolving its MAL IDs to AniList media. Both honor `includeAdult`: Jikan
  * gets `sfw` and the lookup excludes adult media. Either step may reject.
  */
-async function searchMyAnimeList(params: {
-  query: string;
-  mediaType: MediaType;
-  page: number;
-  perPage: number;
-  includeAdult: boolean;
-}) {
-  const found = await jikan.searchMedia({
-    query: params.query,
-    mediaType: params.mediaType,
-    page: params.page,
-    limit: params.perPage,
-    sfw: !params.includeAdult,
-  });
-  const resolvedByMalId = await anilist.getMediaByMalIds(
-    found.results.map((result) => result.mal_id),
-    params.mediaType,
-    params.includeAdult,
+function searchMyAnimeList(
+  params: {
+    query: string;
+    mediaType: MediaType;
+    page: number;
+    perPage: number;
+    includeAdult: boolean;
+  },
+  callerSignal: AbortSignal,
+) {
+  return withRetry(
+    async ({ signal }) => {
+      signal.throwIfAborted();
+      const found = await jikan.searchMedia(
+        {
+          query: params.query,
+          mediaType: params.mediaType,
+          page: params.page,
+          limit: params.perPage,
+          sfw: !params.includeAdult,
+        },
+        { signal, maxRetries: 0 },
+      );
+      const resolvedByMalId = await anilist.getMediaByMalIds(
+        found.results.map((result) => result.mal_id),
+        params.mediaType,
+        params.includeAdult,
+        signal,
+        { maxRetries: 0 },
+      );
+      signal.throwIfAborted();
+      return { found, resolvedByMalId };
+    },
+    { signal: callerSignal, maxRetries: 0, deadlineMs: 5000, operation: 'search-fallback' },
   );
-  return { found, resolvedByMalId };
 }
 
 export const animeSearchMedia = tool('anime_search_media', {
   description:
-    'Search anime or manga by title, genre, tag, season, year, format, or status. Needs at least one criterion — a sort other than SEARCH_MATCH alone browses the whole catalog. Returns ranked results with AniList IDs, titles, scores, format, and episode/chapter counts. When AniList has no match for a title-only query, falls back to MyAnimeList (via Jikan) and maps its rows to AniList IDs.',
+    'Search anime or manga by title, genre, tag, start year, country of origin, format, or status. Anime also supports broadcast-season filters. Needs at least one criterion — a sort other than SEARCH_MATCH alone browses the whole catalog. Returns ranked results with AniList IDs, titles, scores, format, and episode/chapter counts. When AniList has no match for a title-only query, falls back to MyAnimeList (via Jikan) and maps its rows to AniList IDs.',
   annotations: { readOnlyHint: true, openWorldHint: true },
 
   input: z.object({
@@ -116,7 +136,7 @@ export const animeSearchMedia = tool('anime_search_media', {
       ),
     season: SeasonEnum.or(z.literal(''))
       .optional()
-      .describe('Broadcast season filter; exact blank counts as absent.'),
+      .describe('Anime broadcast season filter; exact blank counts as absent.'),
     season_year: z
       .number()
       .int()
@@ -124,7 +144,24 @@ export const animeSearchMedia = tool('anime_search_media', {
       .max(2100)
       .optional()
       .describe(
-        '4-digit year of the broadcast season, e.g. 2024. Without it, season matches that season in every year.',
+        '4-digit year of the anime broadcast season, e.g. 2024. Without it, season matches that season in every year.',
+      ),
+    start_year: z
+      .number()
+      .int()
+      .min(1000)
+      .max(9999)
+      .optional()
+      .describe(
+        '4-digit year the anime or manga started, including dates known only to year or month.',
+      ),
+    country_of_origin: z
+      .string()
+      .trim()
+      .regex(/^(?:[A-Za-z]{2})?$/)
+      .optional()
+      .describe(
+        'ISO 3166-1 alpha-2 country of origin, e.g. JP, KR, CN, or TW. Case-insensitive; blank counts as absent.',
       ),
     format: FormatEnum.or(z.literal(''))
       .optional()
@@ -165,6 +202,7 @@ export const animeSearchMedia = tool('anime_search_media', {
   }),
 
   enrichment: {
+    effectiveQuery: z.string().optional().describe('Normalized search criteria applied.'),
     notice: z
       .string()
       .optional()
@@ -186,7 +224,14 @@ export const animeSearchMedia = tool('anime_search_media', {
       code: JsonRpcErrorCode.ValidationError,
       when: 'No search criterion remains after blank query, genre, and tag values are dropped',
       recovery:
-        'Provide at least one criterion: query, genre, tag, season, season_year, format, status, or a sort other than SEARCH_MATCH.',
+        'Provide at least one criterion: query, genre, tag, start_year, country_of_origin, season, season_year, format, status, or a sort other than SEARCH_MATCH.',
+    },
+    {
+      reason: 'anime_only_season',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'A manga search includes an anime broadcast season or broadcast year',
+      recovery:
+        'Remove season and season_year. Use start_year to search manga by its release year.',
     },
     {
       reason: 'page_depth_exceeded',
@@ -231,6 +276,10 @@ export const animeSearchMedia = tool('anime_search_media', {
               .nullable()
               .describe('Native script title (Japanese, Korean, etc.), or null.'),
             type: z.enum(['ANIME', 'MANGA']).describe('Media type.'),
+            country_of_origin: z
+              .string()
+              .nullable()
+              .describe('ISO 3166-1 alpha-2 country of origin, or null.'),
             format: z
               .string()
               .nullable()
@@ -254,17 +303,25 @@ export const animeSearchMedia = tool('anime_search_media', {
   }),
 
   async handler(input, ctx) {
+    ctx.signal.throwIfAborted();
     const query = present(input.query);
     const genre = present(input.genre);
     const tag = present(input.tag);
+    const country = input.country_of_origin?.toUpperCase() || undefined;
     const sorts = input.sort?.filter((value) => value !== '');
     const sort = sorts?.length ? sorts : undefined;
+
+    if (input.media_type === 'MANGA' && (input.season || input.season_year !== undefined)) {
+      throw ctx.fail('anime_only_season', 'Manga searches cannot use anime broadcast seasons.');
+    }
 
     const filters: string[] = [];
     if (genre) filters.push(`genre="${genre}"`);
     if (tag) filters.push(`tag="${tag}"`);
     if (input.season) filters.push(`season=${input.season}`);
     if (input.season_year) filters.push(`season_year=${input.season_year}`);
+    if (input.start_year !== undefined) filters.push(`start_year=${input.start_year}`);
+    if (country) filters.push(`country_of_origin=${country}`);
     if (input.format) filters.push(`format=${input.format}`);
     if (input.status) filters.push(`status=${input.status}`);
 
@@ -279,6 +336,7 @@ export const animeSearchMedia = tool('anime_search_media', {
 
     const criteria =
       [...(query ? [`query="${query}"`] : []), ...filters].join(', ') || `sort=${sort?.join(',')}`;
+    ctx.enrich.echo(criteria);
     ctx.log.info('Searching anime/manga', { mediaType: input.media_type, criteria });
 
     const search = {
@@ -288,9 +346,12 @@ export const animeSearchMedia = tool('anime_search_media', {
       tag,
       season: input.season || undefined,
       seasonYear: input.season_year,
+      startYear: input.start_year,
+      countryOfOrigin: country,
       format: input.format || undefined,
       status: input.status || undefined,
       includeAdult: input.include_adult,
+      signal: ctx.signal,
     };
     const anilistPage = await anilist.searchMedia({
       ...search,
@@ -298,6 +359,7 @@ export const animeSearchMedia = tool('anime_search_media', {
       page: input.page,
       perPage: input.per_page,
     });
+    ctx.signal.throwIfAborted();
 
     const { currentPage, hasNextPage, perPage } = anilistPage.pageInfo;
     const total = exactResultCount({
@@ -342,7 +404,15 @@ export const animeSearchMedia = tool('anime_search_media', {
       (input.page === 1 ||
         (await anilist.searchMedia({ ...search, page: 1, perPage: 1 })).media.length === 0);
 
-    if (!noAniListMatch) return answerFromAniList([input.page === 1 ? noResults : pastEnd]);
+    ctx.signal.throwIfAborted();
+    if (!noAniListMatch) {
+      if (input.page > 1) return answerFromAniList([pastEnd]);
+      if (genre) {
+        const advice = await anilist.getGenreAdvice(genre, ctx.signal);
+        if (advice) return answerFromAniList([`No results for ${criteria}.`, advice]);
+      }
+      return answerFromAniList([noResults]);
+    }
 
     if (input.per_page > jikan.JIKAN_SEARCH_PAGE_MAX) {
       return answerFromAniList([
@@ -353,16 +423,26 @@ export const animeSearchMedia = tool('anime_search_media', {
 
     ctx.log.info('AniList has no match; trying the MyAnimeList fallback', { query });
     const [fallback] = await Promise.allSettled([
-      searchMyAnimeList({
-        query,
-        mediaType: input.media_type,
-        page: input.page,
-        perPage: input.per_page,
-        includeAdult: input.include_adult,
-      }),
+      searchMyAnimeList(
+        {
+          query,
+          mediaType: input.media_type,
+          page: input.page,
+          perPage: input.per_page,
+          includeAdult: input.include_adult,
+        },
+        ctx.signal,
+      ),
     ]);
 
+    ctx.signal.throwIfAborted();
     if (fallback.status === 'rejected') {
+      if (
+        (fallback.reason instanceof Error && fallback.reason.name === 'AbortError') ||
+        (fallback.reason instanceof McpError &&
+          fallback.reason.code === JsonRpcErrorCode.RequestCancelled)
+      )
+        throw fallback.reason;
       ctx.log.warning('MyAnimeList fallback failed', { query, error: String(fallback.reason) });
       return answerFromAniList([
         noResults,
@@ -382,6 +462,7 @@ export const animeSearchMedia = tool('anime_search_media', {
           title_english: result.title_english,
           title_native: null,
           type: input.media_type,
+          country_of_origin: resolved.countryOfOrigin ?? null,
           format: result.type ?? null,
           status: result.status ?? null,
           season: null,
@@ -442,9 +523,10 @@ export const animeSearchMedia = tool('anime_search_media', {
 
       const chap = r.chapters !== null ? ` chapters:${r.chapters}` : '';
       const typeLabel = ` type:${text(r.type)}`;
+      const country = ` | country_of_origin: ${text(r.country_of_origin ?? 'N/A')}`;
       const romaji = r.title_romaji ? ` title_romaji:${text(r.title_romaji)}` : '';
       lines.push(
-        `**${text(title)}**${native} ${ids}${fmt}${status}${score}${ep}${chap}${season}${adult}${typeLabel}${romaji}${img}`,
+        `**${text(title)}**${native} ${ids}${fmt}${status}${score}${ep}${chap}${season}${adult}${typeLabel}${romaji}${country}${img}`,
       );
     }
 

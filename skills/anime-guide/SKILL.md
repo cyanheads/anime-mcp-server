@@ -4,7 +4,7 @@ description: Use anime_* tools to trace a franchise, follow cast into other role
 license: Apache-2.0
 metadata:
   author: "cyanheads"
-  version: "1.0"
+  version: "1.1"
 ---
 
 ## Scope
@@ -15,15 +15,15 @@ Use this server for catalog-backed anime and manga research: choosing a specific
 
 Keep AniList media IDs, MAL IDs, AniList studio IDs, character IDs, and staff IDs distinct even when their numbers match. Use media IDs returned with titles for title follow-ups. Obtain studio IDs from `anime_get_media` or `anime_get_studio`, then retain the chosen studio ID while paging its filmography.
 
-For cast-to-career research, take the actor name from `anime_find_characters` and use its name lookup for roles. Character and staff IDs identify returned people; they are not media lookup IDs.
+For cast-to-career research, carry `characters[].character_id` into `character_id` and `characters[].voice_actors[].va_id` into `voice_actor_id`. Those are AniList character and staff IDs, respectively; neither belongs in media `id`. Use name lookup to discover a person, then retain the exact person ID for later role pages. Other name matches come from a separate first page, so their continuation says nothing about the selected person's remaining roles.
 
 ## Gates
 
 - Confirm the title, media type, and format before following an adaptation, sequel, or recommendation. Similar names can refer to different works.
 - Before declaring a title absent, inspect the search notice and coverage. A filtered search does not run the MAL fallback; a title-only fallback can be skipped or unavailable. Try alternate title forms and broader criteria before concluding the catalog has no match.
-- Before calling a franchise list complete or presenting a definitive watch order, check traversal depth and the discovered paths. Boundary works have not had their own relations explored; the displayed order is not narrative chronology.
+- Before calling a franchise list complete or presenting a definitive watch order, check traversal depth, discovered paths, and adult-omission notices. Boundary works and omitted adult branches have not had their relations explored; the displayed order is not narrative chronology.
 - Before saying a character has no actor in a language, check actor-data availability and remaining cast pages. Missing provider data is not a confirmed empty cast.
-- Before counting a studio's titles, finish the filmography pages and deduplicate by media ID across pages. Credits can repeat a title across page boundaries; retain the distinction between main studio and co-credit.
+- Before counting a studio's titles, finish the filmography pages and deduplicate by media ID across pages, including with `main_only: true`. Credits can repeat a title across page boundaries; retain the distinction between main studio and co-credit.
 - Before claiming that a title is currently watchable in a country, verify the platform directly. Catalog streaming links are supplementary leads and can be stale.
 - Before stopping on an empty upcoming-schedule or Jikan recommendation page, check continuation. Filtering or unresolved candidates can leave an empty page while later candidates remain.
 - Before concluding that MAL has no recommendations, check Jikan status. Unavailable data and a missing MAL mapping do not establish an empty recommendation list.
@@ -34,8 +34,8 @@ For cast-to-career research, take the actor name from `anime_find_characters` an
 
 **Propose a franchise route.** Inspect the chosen work's relation graph and separate anime, manga, and other formats before proposing a watch or reading route. Use discovery paths to explain connections. Label the route as a recommendation supported by the returned graph, with its depth boundary.
 
-**Follow a voice actor.** Start from the known title's cast to identify the actor for the desired language. Look up that actor by name, confirm the returned identity, and follow role media IDs into title detail. Page roles before making career-wide claims.
+**Follow a voice actor.** Start from the known title's cast to identify the actor for the desired language. Use that credit's staff ID for the actor lookup, then follow role media IDs into title detail. When starting from a name instead, compare native names and associated works before choosing among suggestions. Page roles before making career-wide claims.
 
-**Explore a studio.** Resolve the studio from a title credit or studio-name lookup. Continue with its returned studio ID, collect pages, and deduplicate titles before comparing output. A co-credit alone does not establish primary production responsibility.
+**Explore a studio.** Resolve the studio from a title credit or studio-name lookup. Use `main_only: true` when the question concerns primary animation credits, then retain the studio ID and filter while paging. Deduplicate titles before comparing output. A co-credit alone does not establish primary production responsibility.
 
 **Choose what to watch this season.** Use rankings for discovery and schedules for broadcast timing, then inspect shortlisted titles. Convert returned UTC timestamps to the user's timezone and label broadcast timing separately from streaming availability.

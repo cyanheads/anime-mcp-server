@@ -3,10 +3,14 @@
  * @module tests/tools/anime-find-characters.tool.test
  */
 
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
+import { JsonRpcErrorCode, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
+import {
+  createFetchMock,
+  createMockContext,
+  runToolContract,
+} from '@cyanheads/mcp-ts-core/testing';
 import { escapeMarkdownInline as escapeProviderText } from '@cyanheads/mcp-ts-core/utils';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { assert, beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeFindCharacters } from '@/mcp-server/tools/definitions/anime-find-characters.tool.js';
 import type {
   CharacterEdge,
@@ -48,6 +52,7 @@ const mockCharacterEdges: { characters: CharacterEdge[]; hasNextPage: boolean } 
 const mockMediaNode: MediaNode = {
   id: 11757,
   idMal: 9253,
+  countryOfOrigin: 'JP',
   type: 'ANIME' as const,
   format: 'TV',
   status: 'FINISHED',
@@ -103,6 +108,7 @@ const mockStaffWithRoles: StaffWithRoles = {
         node: {
           id: 11757,
           idMal: 9253,
+          countryOfOrigin: 'JP',
           type: 'ANIME' as const,
           format: 'TV',
           status: 'FINISHED',
@@ -125,6 +131,274 @@ const mockStaffWithRoles: StaffWithRoles = {
 describe('animeFindCharacters', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.mocked(anilist.searchCharacterSuggestions).mockResolvedValue({
+      matches: [],
+      hasNextPage: false,
+    });
+    vi.mocked(anilist.searchStaffSuggestions).mockResolvedValue({
+      matches: [],
+      hasNextPage: false,
+    });
+  });
+
+  it('an omitted cast language keeps every returned dub and its links', async () => {
+    const [edge] = mockCharacterEdges.characters;
+    assert(edge);
+    vi.mocked(anilist.getMediaCharacters).mockResolvedValue({
+      hasNextPage: false,
+      characters: [
+        {
+          ...edge,
+          voiceActors: [
+            ...edge.voiceActors,
+            {
+              id: 900,
+              name: { full: 'English actor', native: null },
+              language: 'ENGLISH',
+              image: { large: 'https://example.com/english.jpg', medium: null },
+              siteUrl: 'https://anilist.co/staff/900',
+            },
+          ],
+        },
+      ],
+    });
+    const result = await runToolContract(animeFindCharacters, { id: 11757 });
+    expect(result.structuredContent).toMatchObject({
+      characters: [
+        {
+          voice_actors: [
+            { language: 'JAPANESE' },
+            {
+              language: 'ENGLISH',
+              va_image_url: 'https://example.com/english.jpg',
+              va_site_url: 'https://anilist.co/staff/900',
+            },
+          ],
+        },
+      ],
+    });
+    expectMarkdownDestination(result.content, 'image', 'https://example.com/english.jpg');
+    expectMarkdownDestination(result.content, 'link', 'https://anilist.co/staff/900');
+  });
+
+  it('defaults cast pages to ten and preserves the advertised continuation', async () => {
+    vi.mocked(anilist.getMediaCharacters).mockResolvedValue({
+      ...mockCharacterEdges,
+      hasNextPage: true,
+    });
+    const result = await runToolContract(animeFindCharacters, { id: 11757, page: 2 });
+    expect(anilist.getMediaCharacters).toHaveBeenCalledWith(
+      expect.objectContaining({ perPage: 10, page: 2 }),
+    );
+    expect(result.structuredContent).toMatchObject({ cap: 10, has_next_page: true });
+    expect(contentText(result)).toContain('page 3');
+  });
+
+  it('looks up a character by exact ID and renders their biography once', async () => {
+    const description = 'Biography '.repeat(60);
+    vi.mocked(anilist.getCharacterById).mockResolvedValue({
+      ...mockCharacterWithMedia,
+      description,
+    });
+    const input = { character_id: 40882, page: 2, per_page: 25 };
+    const summary = await runToolContract(animeFindCharacters, input);
+    expect(summary.structuredContent).toMatchObject({
+      mode: 'by_character',
+      character_description: description,
+      characters: [{ character_id: 40882, media_id: 11757 }],
+    });
+    expect(contentText(summary)).toContain('100 biography characters omitted');
+    expect(contentText(summary).split('description:')).toHaveLength(2);
+    const full = await runToolContract(animeFindCharacters, { ...input, full_text: true });
+    expect(JSON.parse(contentText(full).slice(8, -4))).toMatchObject({
+      character_description: description,
+    });
+    expect(anilist.getCharacterById).toHaveBeenCalledWith(40882, 2, 25, expect.any(AbortSignal));
+    expect(anilist.searchCharacterSuggestions).not.toHaveBeenCalled();
+  });
+
+  it('keeps the selected singleton on later pages and presents independent suggestions', async () => {
+    const name = { full: 'Other', native: null };
+    vi.mocked(anilist.searchCharacter).mockResolvedValue(mockCharacterWithMedia);
+    vi.mocked(anilist.searchCharacterSuggestions).mockResolvedValue({
+      hasNextPage: true,
+      matches: [
+        { id: 40882, name, popularMedia: null },
+        {
+          id: 145,
+          name,
+          popularMedia: { id: 20, title: { romaji: 'Naruto', english: null, native: null } },
+        },
+        { id: 2671, name: { full: null, native: 'さくら' }, popularMedia: null },
+      ],
+    });
+    const result = await runToolContract(animeFindCharacters, {
+      character_name: 'Sakura',
+      page: 5,
+      per_page: 5,
+    });
+    expect(result.structuredContent).toMatchObject({
+      has_next_page: false,
+      characters: [{ character_id: 40882 }],
+      other_matches_has_next_page: true,
+      other_matches_status: 'available',
+      other_matches: [
+        { id: 145, name: 'Other', name_native: null, media_id: 20, media_title: 'Naruto' },
+        { id: 2671, name: null, name_native: 'さくら', media_id: null, media_title: null },
+      ],
+    });
+    expect(contentText(result)).toContain('other_matches_has_next_page: true');
+    expect(contentText(result)).toContain('id:2671');
+    expect(anilist.searchCharacter).toHaveBeenCalledWith('Sakura', 5, 5, expect.any(AbortSignal));
+    expect(anilist.searchCharacterSuggestions).toHaveBeenCalledWith(
+      'Sakura',
+      5,
+      expect.any(AbortSignal),
+    );
+  });
+
+  it('accepts exact staff IDs at the GraphQL bound with a default page size of ten', async () => {
+    vi.mocked(anilist.getStaffById).mockResolvedValue({
+      ...mockStaffWithRoles,
+      id: 2147483647,
+      characterMedia: { pageInfo: { hasNextPage: false, currentPage: 99 }, edges: [] },
+    });
+    const result = await runToolContract(animeFindCharacters, {
+      voice_actor_id: 2147483647,
+      page: 99,
+      character_name: ' ',
+    });
+    expect(result.structuredContent).toMatchObject({
+      mode: 'by_voice_actor',
+      voice_actor: { va_id: 2147483647, roles: [] },
+    });
+    expect(result.structuredContent).not.toHaveProperty('other_matches_status');
+    expect(contentText(result)).toContain('va_id:2147483647');
+    expect(anilist.getStaffById).toHaveBeenCalledWith(2147483647, 99, 10, expect.any(AbortSignal));
+    expect(anilist.searchStaff).not.toHaveBeenCalled();
+  });
+
+  it.each(['character_id', 'voice_actor_id'] as const)(
+    'reports an unknown exact %s on both surfaces',
+    async (key) => {
+      vi.mocked(anilist.getCharacterById).mockResolvedValue(null);
+      vi.mocked(anilist.getStaffById).mockResolvedValue(null);
+      const result = await runToolContract(animeFindCharacters, { [key]: 999 });
+      expect(result.structuredContent).toMatchObject({
+        error: {
+          code: JsonRpcErrorCode.NotFound,
+          data: { reason: 'not_found' },
+        },
+      });
+      expect(contentText(result)).toContain('AniList ID 999');
+      expect(contentText(result)).toContain('Recovery: Check the AniList character or staff ID');
+    },
+  );
+
+  it.each([0, 1.5, 2147483648])('rejects invalid exact person IDs %s before lookup', async (id) => {
+    for (const input of [{ character_id: id }, { voice_actor_id: id }]) {
+      const result = await runToolContract(animeFindCharacters, input);
+      expect(result.structuredContent).toMatchObject({
+        error: { code: JsonRpcErrorCode.InvalidParams },
+      });
+    }
+    expect(anilist.getCharacterById).not.toHaveBeenCalled();
+    expect(anilist.getStaffById).not.toHaveBeenCalled();
+  });
+
+  it('keeps a staff match when suggestions are unavailable, preserving role pagination', async () => {
+    vi.mocked(anilist.searchStaff).mockResolvedValue({
+      ...mockStaffWithRoles,
+      characterMedia: {
+        ...mockStaffWithRoles.characterMedia,
+        pageInfo: { hasNextPage: true, currentPage: 2 },
+      },
+    });
+    vi.mocked(anilist.searchStaffSuggestions).mockRejectedValue(
+      serviceUnavailable('provider unavailable'),
+    );
+    const result = await runToolContract(animeFindCharacters, {
+      voice_actor_name: 'Miyano',
+      page: 2,
+    });
+    expect(result.structuredContent).toMatchObject({
+      has_next_page: true,
+      voice_actor: { va_id: 95061 },
+      other_matches_status: 'unavailable',
+    });
+    expect(result.structuredContent).not.toHaveProperty('other_matches_has_next_page');
+    expect(contentText(result)).toContain('other_matches_status: unavailable');
+    expect(anilist.searchStaff).toHaveBeenCalledWith('Miyano', 2, 10, expect.any(AbortSignal));
+    expect(anilist.searchStaffSuggestions).toHaveBeenCalledWith(
+      'Miyano',
+      10,
+      expect.any(AbortSignal),
+    );
+  });
+
+  it('reports an empty staff suggestion page separately from staff roles', async () => {
+    vi.mocked(anilist.searchStaff).mockResolvedValue(mockStaffWithRoles);
+    vi.mocked(anilist.searchStaffSuggestions).mockResolvedValue({
+      matches: [],
+      hasNextPage: false,
+    });
+    const result = await runToolContract(animeFindCharacters, { voice_actor_name: 'Miyano' });
+    expect(result.structuredContent).toMatchObject({
+      other_matches: [],
+      other_matches_status: 'available',
+      other_matches_has_next_page: false,
+      voice_actor: { roles: [{ media_id: 11757 }] },
+    });
+    expect(contentText(result)).toContain('No other matches on the suggestion page.');
+  });
+
+  it('keeps the selected character when the live service parser receives a malformed suggestion page', async () => {
+    const actual = await vi.importActual<typeof anilist>('@/services/anilist/anilist-service.js');
+    vi.mocked(anilist.searchCharacterSuggestions).mockImplementation(
+      actual.searchCharacterSuggestions,
+    );
+    vi.mocked(anilist.searchCharacter).mockResolvedValue(mockCharacterWithMedia);
+    const fetchMock = createFetchMock();
+    fetchMock.route({
+      match: 'https://graphql.anilist.co/',
+      respond: Response.json({
+        data: { Page: { pageInfo: { hasNextPage: true }, matches: [{}] } },
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock.fetch);
+    try {
+      const result = await runToolContract(animeFindCharacters, { character_name: 'Okabe' });
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toMatchObject({
+        characters: [{ character_id: 40882 }],
+        other_matches_status: 'unavailable',
+      });
+      expect(contentText(result)).toContain('other_matches_status: unavailable');
+      expect(fetchMock.calls).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('propagates caller cancellation during a suggestion lookup', async () => {
+    const controller = new AbortController();
+    const reason = new DOMException('caller cancelled', 'AbortError');
+    vi.mocked(anilist.searchCharacter).mockResolvedValue(mockCharacterWithMedia);
+    vi.mocked(anilist.searchCharacterSuggestions).mockImplementation((_name, _perPage, signal) => {
+      expect(signal).toBe(controller.signal);
+      controller.abort(reason);
+      return Promise.reject(reason);
+    });
+    const ctx = createMockContext({
+      errors: animeFindCharacters.errors,
+      signal: controller.signal,
+    });
+    await expect(
+      animeFindCharacters.handler(
+        animeFindCharacters.input.parse({ character_name: 'Okabe' }),
+        ctx,
+      ),
+    ).rejects.toBe(reason);
   });
 
   it.each(['by_media', 'by_character', 'by_voice_actor'] as const)(
@@ -223,6 +497,7 @@ describe('animeFindCharacters', () => {
           language: undefined,
           page: 3,
           perPage: 1,
+          signal: expect.any(AbortSignal),
         });
       }
     },
@@ -297,7 +572,12 @@ describe('animeFindCharacters', () => {
 
     expect(result.mode).toBe('by_character');
     expect(result.characters[0]!.character_id).toBe(40882);
-    expect(vi.mocked(anilist.searchCharacter)).toHaveBeenCalledWith('Okabe', 1, 25);
+    expect(vi.mocked(anilist.searchCharacter)).toHaveBeenCalledWith(
+      'Okabe',
+      1,
+      10,
+      expect.any(AbortSignal),
+    );
   });
 
   it('by_character mode maps media appearances with VAs from edges', async () => {
@@ -338,7 +618,7 @@ describe('animeFindCharacters', () => {
 
     const result = await animeFindCharacters.handler(input, ctx);
 
-    expect(anilist.searchCharacter).toHaveBeenCalledWith('Okabe', 2, 1);
+    expect(anilist.searchCharacter).toHaveBeenCalledWith('Okabe', 2, 1, expect.any(AbortSignal));
     expect(result.characters).toEqual([
       expect.objectContaining({
         media_id: 14247,
@@ -388,7 +668,8 @@ describe('animeFindCharacters', () => {
 
     await expect(animeFindCharacters.handler(input, ctx)).rejects.toMatchObject({
       code: JsonRpcErrorCode.ValidationError,
-      message: 'Provide at least one of: id, character_name, or voice_actor_name',
+      message:
+        'Provide one of id, character_id, character_name, voice_actor_id, or voice_actor_name',
       data: { reason: 'missing_identifier' },
     });
   });
@@ -465,6 +746,14 @@ describe('animeFindCharacters', () => {
 describe('animeFindCharacters tool contract', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.mocked(anilist.searchCharacterSuggestions).mockResolvedValue({
+      matches: [],
+      hasNextPage: false,
+    });
+    vi.mocked(anilist.searchStaffSuggestions).mockResolvedValue({
+      matches: [],
+      hasNextPage: false,
+    });
   });
 
   it('resolves structuredContent in by_media mode', async () => {
@@ -604,23 +893,24 @@ describe('animeFindCharacters tool contract', () => {
       {
         input: {},
         reason: 'missing_identifier',
-        message: 'Provide at least one of: id, character_name, or voice_actor_name',
+        message:
+          'Provide one of id, character_id, character_name, voice_actor_id, or voice_actor_name',
         recovery:
-          'Provide at least one of: id (media AniList ID), character_name, or voice_actor_name.',
+          'Send one lookup identifier from id, character_id, character_name, voice_actor_id, or voice_actor_name.',
       },
       {
         input: { character_name: 'NonExistentCharacter12345' },
         reason: 'not_found',
         message: 'No character found matching "NonExistentCharacter12345"',
         recovery:
-          'Try a broader name search or check spelling. For character searches, use the full name or a distinctive part of it.',
+          'Check the AniList character or staff ID from a cast result, or try a distinctive part of the name.',
       },
       {
         input: { voice_actor_name: 'NonExistentVA12345' },
         reason: 'not_found',
         message: 'No voice actor/staff found matching "NonExistentVA12345"',
         recovery:
-          'Try a broader name search or check spelling. For character searches, use the full name or a distinctive part of it.',
+          'Check the AniList character or staff ID from a cast result, or try a distinctive part of the name.',
       },
     ] as const;
 
@@ -661,6 +951,14 @@ function contentText(result: { content: unknown[] }): string {
 describe('animeFindCharacters input combinations', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.mocked(anilist.searchCharacterSuggestions).mockResolvedValue({
+      matches: [],
+      hasNextPage: false,
+    });
+    vi.mocked(anilist.searchStaffSuggestions).mockResolvedValue({
+      matches: [],
+      hasNextPage: false,
+    });
   });
 
   // ─── characterization: behavior that holds before and after ─────────────────
@@ -702,6 +1000,9 @@ describe('animeFindCharacters input combinations', () => {
     ],
     [{ character_name: 'Edward Elric', language: 'JAPANESE' }, 'language'],
     [{ voice_actor_name: 'Romi Park', language: 'ENGLISH' }, 'language'],
+    [{ id: 5114, character_id: 12 }, 'id, character_id'],
+    [{ character_id: 12, voice_actor_id: 34 }, 'character_id, voice_actor_id'],
+    [{ voice_actor_id: 34, language: 'JAPANESE' }, 'language'],
   ] as const)('rejects %o with conflicting_inputs before any AniList call', async (raw, named) => {
     const declared = animeFindCharacters.errors?.find((e) => e.reason === 'conflicting_inputs');
 

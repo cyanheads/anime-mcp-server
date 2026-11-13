@@ -26,6 +26,7 @@ const mockPage: MediaPage = {
     {
       id: 11757,
       idMal: 9253,
+      countryOfOrigin: 'JP',
       type: 'ANIME' as const,
       format: 'TV',
       status: 'FINISHED',
@@ -62,7 +63,10 @@ describe('animeGetRankings', () => {
       })),
     });
     const result = await runToolContract(animeGetRankings, { media_type: 'ANIME', mode: 'top' });
-    expect(result.structuredContent).toMatchObject({ entries: [{ title }] });
+    expect(result.structuredContent).toMatchObject({
+      entries: [{ title, country_of_origin: 'JP' }],
+    });
+    expect(JSON.stringify(result.content)).toContain('country_of_origin: JP');
     expectLiteralProse(result.content, title);
     expectMarkdownDestination(result.content, 'image', 'https://example.com/cover.jpg');
   });
@@ -166,6 +170,7 @@ describe('animeGetRankings', () => {
         {
           id: 12345,
           idMal: null,
+          countryOfOrigin: null,
           type: 'ANIME' as const,
           format: null,
           status: null,

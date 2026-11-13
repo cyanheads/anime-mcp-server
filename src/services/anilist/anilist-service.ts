@@ -5,6 +5,7 @@
  * @module services/anilist/anilist-service
  */
 
+import { z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, McpError, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import {
   createPacer,
@@ -19,6 +20,7 @@ import type {
   CharacterEdge,
   CharacterWithMedia,
   MediaDetail,
+  MediaFilterCatalog,
   MediaFormat,
   MediaNode,
   MediaPage,
@@ -26,6 +28,7 @@ import type {
   MediaSeason,
   MediaStatus,
   MediaType,
+  PersonSuggestions,
   RecommendationNode,
   StaffWithRoles,
   StudioDetail,
@@ -35,6 +38,8 @@ import type {
 
 const ANILIST_URL = 'https://graphql.anilist.co';
 const TIMEOUT_MS = 15_000;
+const ADVISORY_QUERY = { maxRetries: 0, deadlineMs: 5_000 };
+const CATALOG_TTL_MS = 24 * 60 * 60 * 1000;
 const REQUEST_CONTEXT = requestContextService.createRequestContext({
   operation: 'anilist-service',
 });
@@ -52,6 +57,12 @@ export function shutdownAniList(): void {
 
 // ─── Core query executor ──────────────────────────────────────────────────────
 
+const graphQlEnvelope = z.object({
+  data: z.record(z.string(), z.unknown()).nullish(),
+  errors: z.unknown().optional(),
+});
+const graphQlErrors = z.array(z.object({ message: z.string(), status: z.number().optional() }));
+
 /**
  * Execute a GraphQL query against AniList. Returns the `data` payload.
  * AniList's page-depth refusal (HTTP 400) surfaces as a typed, non-retried
@@ -62,6 +73,7 @@ function query<T>(
   gql: string,
   variables: Record<string, unknown>,
   callerSignal?: AbortSignal,
+  { maxRetries = 3, deadlineMs }: { maxRetries?: number; deadlineMs?: number } = {},
 ): Promise<T> {
   return withRetry(
     ({ signal }) =>
@@ -76,27 +88,43 @@ function query<T>(
             throw toPageDepthError(error) ?? error;
           });
 
-          const json = (await resp.json()) as {
-            data: T;
-            errors?: Array<{ message: string; status: number }>;
-          };
+          const raw: unknown = await resp.json().catch((error: unknown) => {
+            if (!(error instanceof SyntaxError)) throw error;
+            throw serviceUnavailable(
+              'AniList returned invalid JSON.',
+              { retryable: false },
+              { cause: error },
+            );
+          });
+          signal.throwIfAborted();
+          const envelope = graphQlEnvelope.safeParse(raw);
+          if (!envelope.success) {
+            throw serviceUnavailable('AniList returned an invalid GraphQL envelope.', {
+              retryable: false,
+            });
+          }
+          const json = envelope.data;
 
           // AniList can return HTTP 200 on GraphQL errors.
           // When data is present (e.g. data.Media: null on not-found), return it so
           // callers can check for null and throw the appropriate domain error.
-          if (json.errors?.length && !json.data) {
-            const firstErr = json.errors[0];
-            throw serviceUnavailable(`AniList GraphQL error: ${firstErr?.message ?? 'unknown'}`, {
-              status: firstErr?.status,
-            });
+          if (!json.data) {
+            const errors = graphQlErrors.safeParse(json.errors);
+            const firstError = errors.success ? errors.data[0] : undefined;
+            if (firstError) {
+              throw serviceUnavailable(`AniList GraphQL error: ${firstError.message}`, {
+                status: firstError.status,
+              });
+            }
+            throw serviceUnavailable('AniList returned no GraphQL data.', { retryable: false });
           }
-
-          return json.data;
+          return json.data as T;
         },
         { signal },
       ),
     {
-      maxRetries: 3,
+      maxRetries,
+      ...(deadlineMs === undefined ? {} : { deadlineMs }),
       baseDelayMs: 1000,
       maxDelayMs: 30_000,
       operation: 'anilist-query',
@@ -110,7 +138,7 @@ function query<T>(
 
 const MEDIA_NODE_FRAGMENT = `
   id idMal type format status season seasonYear episodes chapters volumes
-  isAdult meanScore
+  isAdult meanScore countryOfOrigin
   title { romaji english native }
   coverImage { extraLarge large medium color }
 `;
@@ -118,7 +146,7 @@ const MEDIA_NODE_FRAGMENT = `
 const MEDIA_DETAIL_FRAGMENT = `
   ${MEDIA_NODE_FRAGMENT}
   description(asHtml: false)
-  source hashtag bannerImage
+  source hashtag bannerImage duration synonyms
   averageScore popularity favourites isFavourite
   startDate { year month day }
   endDate { year month day }
@@ -147,45 +175,60 @@ export async function searchMedia(params: {
   tag?: string | undefined;
   season?: MediaSeason | undefined;
   seasonYear?: number | undefined;
+  startYear?: number | undefined;
+  countryOfOrigin?: string | undefined;
   format?: MediaFormat | undefined;
   status?: MediaStatus | undefined;
   sort?: string[] | undefined;
   page?: number | undefined;
   perPage?: number | undefined;
   includeAdult?: boolean | undefined;
+  signal?: AbortSignal | undefined;
 }): Promise<MediaPage> {
   const gql = `
     query SearchMedia(
       $type: MediaType, $search: String, $genre: String, $tag: String,
       $season: MediaSeason, $seasonYear: Int, $format: MediaFormat,
       $status: MediaStatus, $sort: [MediaSort], $page: Int, $perPage: Int,
-      $isAdult: Boolean
+      $isAdult: Boolean, $startDateGreater: FuzzyDateInt, $startDateLesser: FuzzyDateInt,
+      $countryOfOrigin: CountryCode
     ) {
       Page(page: $page, perPage: $perPage) {
         pageInfo { currentPage hasNextPage perPage }
         media(
           type: $type, search: $search, genre: $genre, tag: $tag,
           season: $season, seasonYear: $seasonYear, format: $format,
-          status: $status, sort: $sort, isAdult: $isAdult
+          status: $status, sort: $sort, isAdult: $isAdult,
+          startDate_greater: $startDateGreater, startDate_lesser: $startDateLesser,
+          countryOfOrigin: $countryOfOrigin
         ) { ${MEDIA_NODE_FRAGMENT} }
       }
     }
   `;
 
-  const data = await query<{ Page: MediaPage }>(gql, {
-    type: params.mediaType,
-    search: params.query,
-    genre: params.genre,
-    tag: params.tag,
-    season: params.season,
-    seasonYear: params.seasonYear,
-    format: params.format,
-    status: params.status,
-    sort: params.sort ?? (params.query ? ['SEARCH_MATCH'] : ['POPULARITY_DESC']),
-    page: params.page ?? 1,
-    perPage: Math.min(params.perPage ?? 20, 50),
-    isAdult: params.includeAdult ? undefined : false,
-  });
+  const yearStart = params.startYear === undefined ? undefined : params.startYear * 10_000;
+  const data = await query<{ Page: MediaPage }>(
+    gql,
+    {
+      type: params.mediaType,
+      search: params.query,
+      genre: params.genre,
+      tag: params.tag,
+      season: params.season,
+      seasonYear: params.seasonYear,
+      // AniList compares fuzzy dates as YYYYMMDD, using zeroes for unknown components.
+      startDateGreater: yearStart === undefined ? undefined : yearStart - 1,
+      startDateLesser: yearStart === undefined ? undefined : yearStart + 10_000,
+      countryOfOrigin: params.countryOfOrigin,
+      format: params.format,
+      status: params.status,
+      sort: params.sort ?? (params.query ? ['SEARCH_MATCH'] : ['POPULARITY_DESC']),
+      page: params.page ?? 1,
+      perPage: Math.min(params.perPage ?? 20, 50),
+      isAdult: params.includeAdult ? undefined : false,
+    },
+    params.signal,
+  );
 
   return data.Page;
 }
@@ -224,7 +267,10 @@ export async function getMediaById(
 }
 
 /** Get relation edges for a media entry (one hop). Returns null if not found. */
-export async function getMediaRelations(id: number): Promise<MediaRelationEdge[] | null> {
+export async function getMediaRelations(
+  id: number,
+  signal?: AbortSignal,
+): Promise<MediaRelationEdge[] | null> {
   const gql = `
     query GetRelations($id: Int) {
       Media(id: $id) {
@@ -237,7 +283,7 @@ export async function getMediaRelations(id: number): Promise<MediaRelationEdge[]
   try {
     const data = await query<{
       Media: { id: number; relations: { edges: MediaRelationEdge[] } } | null;
-    }>(gql, { id });
+    }>(gql, { id }, signal);
     return data.Media?.relations.edges ?? null;
   } catch (err) {
     if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound) return null;
@@ -331,6 +377,7 @@ export async function getMediaCharacters(params: {
   language?: string | undefined;
   page?: number | undefined;
   perPage?: number | undefined;
+  signal?: AbortSignal | undefined;
 }): Promise<{ characters: CharacterEdge[]; hasNextPage: boolean } | null> {
   const gql = `
     query GetCharacters($id: Int!, $language: StaffLanguage, $page: Int, $perPage: Int) {
@@ -367,12 +414,16 @@ export async function getMediaCharacters(params: {
           edges: CharacterEdge[];
         };
       } | null;
-    }>(gql, {
-      id: params.mediaId,
-      language: params.language || undefined,
-      page: params.page ?? 1,
-      perPage: Math.min(params.perPage ?? 25, 25),
-    });
+    }>(
+      gql,
+      {
+        id: params.mediaId,
+        language: params.language || undefined,
+        page: params.page ?? 1,
+        perPage: Math.min(params.perPage ?? 25, 25),
+      },
+      params.signal,
+    );
 
     if (!data.Media) return null;
 
@@ -386,15 +437,17 @@ export async function getMediaCharacters(params: {
   }
 }
 
-/** Search for a character by name. */
-export async function searchCharacter(
-  name: string,
+/** Find a character by name, or load an exact character when given an ID. */
+async function lookupCharacter(
+  selector: string | number,
   page = 1,
   perPage = 10,
+  signal?: AbortSignal,
 ): Promise<CharacterWithMedia | null> {
+  const byId = typeof selector === 'number';
   const gql = `
-    query SearchCharacter($search: String!, $page: Int, $perPage: Int) {
-      Character(search: $search) {
+    query ${byId ? 'GetCharacter($id: Int!' : 'SearchCharacter($search: String!'}, $page: Int, $perPage: Int) {
+      Character(${byId ? 'id: $id' : 'search: $search'}) {
         id
         name { full native }
         image { large medium }
@@ -415,27 +468,55 @@ export async function searchCharacter(
   `;
 
   try {
-    const data = await query<{ Character: CharacterWithMedia | null }>(gql, {
-      search: name,
-      page,
-      perPage: Math.min(perPage, 25),
-    });
-    return data.Character;
+    const data = await query<{ Character: CharacterWithMedia | null }>(
+      gql,
+      {
+        ...(byId ? { id: selector } : { search: selector }),
+        page,
+        perPage: Math.min(perPage, 25),
+      },
+      signal,
+    );
+    return data.Character
+      ? { ...data.Character, description: normalizeAniListDescription(data.Character.description) }
+      : null;
   } catch (err) {
     if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound) return null;
     throw err;
   }
 }
 
-/** Search for a voice actor (staff) by name. */
-export async function searchStaff(
+/** Use AniList's singleton name match and page its appearances. */
+export function searchCharacter(
   name: string,
+  page?: number,
+  perPage?: number,
+  signal?: AbortSignal,
+): Promise<CharacterWithMedia | null> {
+  return lookupCharacter(name, page, perPage, signal);
+}
+
+/** Get the exact character and a page of appearances. */
+export function getCharacterById(
+  id: number,
+  page?: number,
+  perPage?: number,
+  signal?: AbortSignal,
+): Promise<CharacterWithMedia | null> {
+  return lookupCharacter(id, page, perPage, signal);
+}
+
+/** Find AniList staff by name or exact ID, paging their voice acting roles. */
+async function lookupStaff(
+  selector: string | number,
   page = 1,
   perPage = 10,
+  signal?: AbortSignal,
 ): Promise<StaffWithRoles | null> {
+  const byId = typeof selector === 'number';
   const gql = `
-    query SearchStaff($search: String!, $page: Int, $perPage: Int) {
-      Staff(search: $search) {
+    query ${byId ? 'GetStaff($id: Int!' : 'SearchStaff($search: String!'}, $page: Int, $perPage: Int) {
+      Staff(${byId ? 'id: $id' : 'search: $search'}) {
         id
         name { full native }
         language
@@ -455,11 +536,15 @@ export async function searchStaff(
   `;
 
   try {
-    const data = await query<{ Staff: StaffWithRoles | null }>(gql, {
-      search: name,
-      page,
-      perPage,
-    });
+    const data = await query<{ Staff: StaffWithRoles | null }>(
+      gql,
+      {
+        ...(byId ? { id: selector } : { search: selector }),
+        page,
+        perPage: Math.min(perPage, 25),
+      },
+      signal,
+    );
     return data.Staff
       ? { ...data.Staff, description: normalizeAniListDescription(data.Staff.description) }
       : null;
@@ -467,6 +552,191 @@ export async function searchStaff(
     if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound) return null;
     throw err;
   }
+}
+
+/** Use AniList's singleton name match and page its voice roles. */
+export function searchStaff(
+  name: string,
+  page?: number,
+  perPage?: number,
+  signal?: AbortSignal,
+): Promise<StaffWithRoles | null> {
+  return lookupStaff(name, page, perPage, signal);
+}
+
+/** Get the exact staff member and a page of voice roles. */
+export function getStaffById(
+  id: number,
+  page?: number,
+  perPage?: number,
+  signal?: AbortSignal,
+): Promise<StaffWithRoles | null> {
+  return lookupStaff(id, page, perPage, signal);
+}
+
+const optionalText = z.string().nullish();
+const suggestionPageSchema = z.object({
+  Page: z.object({
+    pageInfo: z.object({ hasNextPage: z.boolean() }),
+    matches: z.array(
+      z
+        .object({
+          id: z.number().int().positive(),
+          name: z.object({ full: optionalText, native: optionalText }).nullish(),
+          popularMedia: z
+            .object({
+              edges: z
+                .array(
+                  z
+                    .object({
+                      node: z
+                        .object({
+                          id: z.number().int().positive(),
+                          title: z
+                            .object({
+                              romaji: optionalText,
+                              english: optionalText,
+                              native: optionalText,
+                            })
+                            .nullish(),
+                        })
+                        .nullish(),
+                    })
+                    .nullable(),
+                )
+                .nullish(),
+            })
+            .nullish(),
+        })
+        .nullable(),
+    ),
+  }),
+});
+
+async function searchPersonSuggestions(
+  field: 'characters' | 'staff',
+  name: string,
+  perPage: number,
+  signal?: AbortSignal,
+): Promise<PersonSuggestions> {
+  const connection = field === 'characters' ? 'media' : 'characterMedia';
+  const gql = `
+    query PersonSuggestions($search: String!, $perPage: Int!) {
+      Page(page: 1, perPage: $perPage) {
+        pageInfo { hasNextPage }
+        matches: ${field}(search: $search) {
+          id
+          name { full native }
+          popularMedia: ${connection}(perPage: 1, sort: [POPULARITY_DESC]) {
+            edges { node { id title { romaji english native } } }
+          }
+        }
+      }
+    }
+  `;
+  const data = await query<unknown>(
+    gql,
+    { search: name, perPage: Math.min(perPage, 25) },
+    signal,
+    ADVISORY_QUERY,
+  );
+  const parsed = suggestionPageSchema.safeParse(data);
+  if (!parsed.success)
+    throw serviceUnavailable('AniList returned an invalid person suggestion page.');
+  const { Page } = parsed.data;
+  return {
+    matches: Page.matches
+      .filter((match) => match !== null)
+      .map(({ id, name, popularMedia }) => {
+        const node = popularMedia?.edges?.[0]?.node;
+        return {
+          id,
+          name: { full: name?.full ?? null, native: name?.native ?? null },
+          popularMedia: node
+            ? {
+                id: node.id,
+                title: {
+                  romaji: node.title?.romaji ?? null,
+                  english: node.title?.english ?? null,
+                  native: node.title?.native ?? null,
+                },
+              }
+            : null,
+        };
+      }),
+    hasNextPage: Page.pageInfo.hasNextPage,
+  };
+}
+
+/** Read the first character suggestion page without changing the selected match. */
+export function searchCharacterSuggestions(
+  name: string,
+  perPage: number,
+  signal?: AbortSignal,
+): Promise<PersonSuggestions> {
+  return searchPersonSuggestions('characters', name, perPage, signal);
+}
+
+/** Read the first staff suggestion page without changing the selected match. */
+export function searchStaffSuggestions(
+  name: string,
+  perPage: number,
+  signal?: AbortSignal,
+): Promise<PersonSuggestions> {
+  return searchPersonSuggestions('staff', name, perPage, signal);
+}
+
+const catalogSchema = z.object({
+  GenreCollection: z.array(z.string().trim().min(1)).min(1),
+  MediaTagCollection: z.array(z.object({ name: z.string().trim().min(1) })).min(1),
+});
+let cachedCatalog: { value: MediaFilterCatalog; expiresAt: number } | undefined;
+
+/** Read the AniList vocabulary lazily, caching only a completed and valid response. */
+export async function getMediaFilterCatalog(signal?: AbortSignal): Promise<MediaFilterCatalog> {
+  signal?.throwIfAborted();
+  if (cachedCatalog && Date.now() < cachedCatalog.expiresAt) return cachedCatalog.value;
+
+  const data = await query<unknown>(
+    'query MediaFilterCatalog { GenreCollection MediaTagCollection { name } }',
+    {},
+    signal,
+    ADVISORY_QUERY,
+  );
+  const parsed = catalogSchema.safeParse(data);
+  if (!parsed.success)
+    throw serviceUnavailable('AniList returned an invalid media filter catalog.');
+  signal?.throwIfAborted();
+  const value = {
+    genres: parsed.data.GenreCollection,
+    tags: parsed.data.MediaTagCollection.map(({ name }) => name),
+  };
+  cachedCatalog = { value, expiresAt: Date.now() + CATALOG_TTL_MS };
+  return value;
+}
+
+/** Suggest the matching tag, or explain an unrecognized genre, after an empty result. */
+export async function getGenreAdvice(
+  genre: string,
+  signal: AbortSignal,
+): Promise<string | undefined> {
+  let catalog: MediaFilterCatalog;
+  try {
+    catalog = await getMediaFilterCatalog(signal);
+  } catch (error) {
+    signal.throwIfAborted();
+    if (error instanceof Error && error.name === 'AbortError') throw error;
+    if (error instanceof McpError && error.code === JsonRpcErrorCode.RequestCancelled) throw error;
+    if (error instanceof McpError || error instanceof SyntaxError) return undefined;
+    throw error;
+  }
+  signal.throwIfAborted();
+  const normalized = genre.toLowerCase();
+  if (catalog.genres.some((name) => name.toLowerCase() === normalized)) return undefined;
+  if (catalog.tags.some((name) => name.toLowerCase() === normalized)) {
+    return 'AniList recognizes this filter as a tag. Try the same value in tag instead of genre.';
+  }
+  return 'AniList does not recognize this genre. Check the genre name or remove the genre filter.';
 }
 
 /**
@@ -478,7 +748,9 @@ export async function getMediaByMalIds(
   mediaType: MediaType,
   includeAdult: boolean,
   signal?: AbortSignal,
+  options?: { maxRetries?: number },
 ): Promise<Map<number, MediaNode>> {
+  signal?.throwIfAborted();
   const idMalIn = [...new Set(malIds)].filter((id) => id > 0);
   if (idMalIn.length === 0) return new Map();
 
@@ -498,6 +770,7 @@ export async function getMediaByMalIds(
       isAdult: includeAdult ? undefined : false,
     },
     signal,
+    options,
   );
   const mediaByMalId = new Map<number, MediaNode>();
   for (const media of data.Page.media) {
@@ -573,6 +846,7 @@ export async function getRankings(params: {
   page?: number | undefined;
   perPage?: number | undefined;
   includeAdult?: boolean | undefined;
+  signal?: AbortSignal | undefined;
 }): Promise<MediaPage> {
   let sort: string[];
   let season: string | undefined = params.season;
@@ -616,18 +890,22 @@ export async function getRankings(params: {
     }
   `;
 
-  const data = await query<{ Page: MediaPage }>(gql, {
-    type: params.mediaType,
-    sort,
-    format: params.format || undefined,
-    genre: params.genre || undefined,
-    tag: params.tag || undefined,
-    season: season || undefined,
-    seasonYear: seasonYear || undefined,
-    page: params.page ?? 1,
-    perPage: Math.min(params.perPage ?? 25, 50),
-    isAdult: params.includeAdult ? undefined : false,
-  });
+  const data = await query<{ Page: MediaPage }>(
+    gql,
+    {
+      type: params.mediaType,
+      sort,
+      format: params.format || undefined,
+      genre: params.genre || undefined,
+      tag: params.tag || undefined,
+      season: season || undefined,
+      seasonYear: seasonYear || undefined,
+      page: params.page ?? 1,
+      perPage: Math.min(params.perPage ?? 25, 50),
+      isAdult: params.includeAdult ? undefined : false,
+    },
+    params.signal,
+  );
 
   return data.Page;
 }
@@ -640,7 +918,7 @@ const STUDIO_MEDIA_PAGE_MAX = 25;
  * AniList echoes the applied page size in `pageInfo.perPage`.
  */
 const STUDIO_MEDIA_SELECTION = `
-  media(page: $page, perPage: $perPage, sort: $mediaSort) {
+  media(page: $page, perPage: $perPage, sort: $mediaSort, isMain: $isMain) {
     pageInfo { currentPage hasNextPage perPage }
     edges { isMainStudio node { ${MEDIA_NODE_FRAGMENT} } }
   }
@@ -652,9 +930,11 @@ export async function searchStudio(params: {
   sort?: string;
   page?: number;
   perPage?: number;
+  mainOnly?: boolean | undefined;
+  signal?: AbortSignal | undefined;
 }): Promise<StudioDetail | null> {
   const gql = `
-    query SearchStudio($search: String!, $mediaSort: [MediaSort], $page: Int, $perPage: Int) {
+    query SearchStudio($search: String!, $mediaSort: [MediaSort], $page: Int, $perPage: Int, $isMain: Boolean) {
       Studio(search: $search) {
         id name isAnimationStudio siteUrl
         ${STUDIO_MEDIA_SELECTION}
@@ -663,12 +943,17 @@ export async function searchStudio(params: {
   `;
 
   try {
-    const data = await query<{ Studio: StudioDetail | null }>(gql, {
-      search: params.name,
-      mediaSort: params.sort ? [params.sort] : ['POPULARITY_DESC'],
-      page: params.page ?? 1,
-      perPage: Math.min(params.perPage ?? STUDIO_MEDIA_PAGE_MAX, STUDIO_MEDIA_PAGE_MAX),
-    });
+    const data = await query<{ Studio: StudioDetail | null }>(
+      gql,
+      {
+        search: params.name,
+        mediaSort: params.sort ? [params.sort] : ['POPULARITY_DESC'],
+        page: params.page ?? 1,
+        perPage: Math.min(params.perPage ?? STUDIO_MEDIA_PAGE_MAX, STUDIO_MEDIA_PAGE_MAX),
+        isMain: params.mainOnly ? true : undefined,
+      },
+      params.signal,
+    );
     return data.Studio;
   } catch (err) {
     if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound) return null;
@@ -682,9 +967,11 @@ export async function getStudioById(params: {
   sort?: string;
   page?: number;
   perPage?: number;
+  mainOnly?: boolean | undefined;
+  signal?: AbortSignal | undefined;
 }): Promise<StudioDetail | null> {
   const gql = `
-    query GetStudio($id: Int!, $mediaSort: [MediaSort], $page: Int, $perPage: Int) {
+    query GetStudio($id: Int!, $mediaSort: [MediaSort], $page: Int, $perPage: Int, $isMain: Boolean) {
       Studio(id: $id) {
         id name isAnimationStudio siteUrl
         ${STUDIO_MEDIA_SELECTION}
@@ -693,12 +980,17 @@ export async function getStudioById(params: {
   `;
 
   try {
-    const data = await query<{ Studio: StudioDetail | null }>(gql, {
-      id: params.id,
-      mediaSort: params.sort ? [params.sort] : ['POPULARITY_DESC'],
-      page: params.page ?? 1,
-      perPage: Math.min(params.perPage ?? STUDIO_MEDIA_PAGE_MAX, STUDIO_MEDIA_PAGE_MAX),
-    });
+    const data = await query<{ Studio: StudioDetail | null }>(
+      gql,
+      {
+        id: params.id,
+        mediaSort: params.sort ? [params.sort] : ['POPULARITY_DESC'],
+        page: params.page ?? 1,
+        perPage: Math.min(params.perPage ?? STUDIO_MEDIA_PAGE_MAX, STUDIO_MEDIA_PAGE_MAX),
+        isMain: params.mainOnly ? true : undefined,
+      },
+      params.signal,
+    );
     return data.Studio;
   } catch (err) {
     if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound) return null;

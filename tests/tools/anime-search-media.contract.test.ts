@@ -8,8 +8,13 @@
  */
 
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { createFetchMock, runToolContract } from '@cyanheads/mcp-ts-core/testing';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  createFetchMock,
+  createMockContext,
+  runToolContract,
+} from '@cyanheads/mcp-ts-core/testing';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { animeGetRankings } from '@/mcp-server/tools/definitions/anime-get-rankings.tool.js';
 import { animeSearchMedia } from '@/mcp-server/tools/definitions/anime-search-media.tool.js';
 
 const ANILIST = 'https://graphql.anilist.co/';
@@ -29,6 +34,7 @@ afterEach(() => {
 const mediaNode = (id: number) => ({
   id,
   idMal: id,
+  countryOfOrigin: 'JP',
   type: 'ANIME',
   format: 'TV',
   status: 'FINISHED',
@@ -54,7 +60,360 @@ function contentText(result: { content: unknown[] }): string {
 const anilistCalls = () => http.calls.filter((call) => call.request.url === ANILIST);
 const jikanCalls = () => http.calls.filter((call) => JIKAN.test(call.request.url));
 
+describe('optional title fallback budget', () => {
+  let tool: typeof animeSearchMedia;
+  let stopAniList: () => void;
+  let stopJikan: () => void;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.useFakeTimers();
+    ({ animeSearchMedia: tool } = await import(
+      '@/mcp-server/tools/definitions/anime-search-media.tool.js'
+    ));
+    ({ shutdownAniList: stopAniList } = await import('@/services/anilist/anilist-service.js'));
+    ({ shutdownJikan: stopJikan } = await import('@/services/jikan/jikan-service.js'));
+  });
+
+  afterEach(() => {
+    stopAniList();
+    stopJikan();
+    vi.useRealTimers();
+  });
+
+  const input = { media_type: 'ANIME', query: 'unmatched title' } as const;
+  const emptyPage = () =>
+    Response.json({
+      data: { Page: { pageInfo: { currentPage: 1, hasNextPage: false, perPage: 20 }, media: [] } },
+    });
+  const throttled = () =>
+    new Response('Rate limited', { status: 429, headers: { 'Retry-After': '0' } });
+
+  function delayedJikanBody(signal: AbortSignal) {
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          const timer = setTimeout(() => {
+            controller.enqueue(
+              new TextEncoder().encode('{"data":[{"mal_id":1,"title":"Fixture"}]}'),
+            );
+            controller.close();
+            signal.removeEventListener('abort', onAbort);
+          }, 3000);
+          function onAbort() {
+            clearTimeout(timer);
+            controller.error(signal.reason);
+          }
+          signal.addEventListener('abort', onAbort, { once: true });
+        },
+      }),
+    );
+  }
+
+  it.each(['Jikan', 'AniList'] as const)(
+    'makes one attempt when %s rate limits the optional leg',
+    async (provider) => {
+      http.route(
+        {
+          match: ANILIST,
+          respond: async (request) =>
+            'idMalIn' in (await variablesOf(request)) ? throttled() : emptyPage(),
+        },
+        {
+          match: JIKAN,
+          respond: () =>
+            provider === 'Jikan'
+              ? throttled()
+              : Response.json({ data: [{ mal_id: 1, title: 'Fixture' }] }),
+        },
+      );
+      const pending = runToolContract(tool, input);
+      await vi.advanceTimersByTimeAsync(30000);
+      const result = await pending;
+      expect(result.structuredContent).toMatchObject({ source: 'anilist', total_results: 0 });
+      expect(contentText(result)).toMatch(/MyAnimeList fallback .*unavailable/);
+      expect(jikanCalls()).toHaveLength(1);
+      expect(anilistCalls()).toHaveLength(provider === 'Jikan' ? 1 : 2);
+    },
+  );
+
+  it('includes Jikan body reads and AniList resolution in the same five seconds', async () => {
+    let resolutionSignal: AbortSignal | undefined;
+    http.route(
+      { match: JIKAN, respond: (request) => delayedJikanBody(request.signal) },
+      {
+        match: ANILIST,
+        respond: async (request) => {
+          if (!('idMalIn' in (await variablesOf(request)))) return emptyPage();
+          resolutionSignal = request.signal;
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                request.signal.addEventListener(
+                  'abort',
+                  () => controller.error(request.signal.reason),
+                  { once: true },
+                );
+              },
+            }),
+          );
+        },
+      },
+    );
+    const pending = runToolContract(tool, input);
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(resolutionSignal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(resolutionSignal?.aborted).toBe(true);
+    const result = await pending;
+    expect(result.structuredContent).toMatchObject({ source: 'anilist', total_results: 0 });
+    expect(contentText(result)).toMatch(/MyAnimeList fallback .*unavailable/);
+    await vi.advanceTimersByTimeAsync(15000);
+    expect(anilistCalls()).toHaveLength(2);
+    expect(jikanCalls()).toHaveLength(1);
+  });
+
+  it('propagates caller cancellation during the optional body read', async () => {
+    http.route(
+      { match: ANILIST, respond: emptyPage },
+      { match: JIKAN, respond: (request) => delayedJikanBody(request.signal) },
+    );
+    const controller = new AbortController();
+    const pending = tool.handler(
+      tool.input.parse(input),
+      createMockContext({ errors: tool.errors, signal: controller.signal }),
+    );
+    const settled = Promise.resolve(pending).then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(jikanCalls()).toHaveLength(1);
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(await settled).toMatchObject({ error: { name: 'AbortError' } });
+    expect(anilistCalls()).toHaveLength(1);
+  });
+
+  it('does no provider work when the caller has already cancelled', async () => {
+    const signal = AbortSignal.abort();
+    await expect(
+      tool.handler(tool.input.parse(input), createMockContext({ errors: tool.errors, signal })),
+    ).rejects.toBe(signal.reason);
+    expect(http.calls).toHaveLength(0);
+  });
+
+  it('includes the Jikan pacing wait in the deadline', async () => {
+    const { searchMedia } = await import('@/services/jikan/jikan-service.js');
+    let jikanSignal: AbortSignal | undefined;
+    http.route(
+      { match: ANILIST, respond: emptyPage },
+      {
+        match: JIKAN,
+        respond: (request) => {
+          if (new URL(request.url).searchParams.get('q') === 'seed')
+            return Response.json({ data: [] });
+          jikanSignal = request.signal;
+          return new Promise<Response>((_resolve, reject) => {
+            request.signal.addEventListener('abort', () => reject(request.signal.reason), {
+              once: true,
+            });
+          });
+        },
+      },
+    );
+    const seed = searchMedia({ query: 'seed', mediaType: 'ANIME' });
+    await vi.advanceTimersByTimeAsync(0);
+    await seed;
+    const pending = runToolContract(tool, input);
+    await vi.advanceTimersByTimeAsync(349);
+    expect(jikanCalls()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(4650);
+    expect(jikanCalls()).toHaveLength(2);
+    expect(jikanSignal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(jikanSignal?.aborted).toBe(true);
+    expect(contentText(await pending)).toMatch(/MyAnimeList fallback .*unavailable/);
+    expect(anilistCalls()).toHaveLength(1);
+  });
+});
+
 describe('anime_search_media over the wire', () => {
+  it('uses the same vocabulary for search and rankings, only for empty first pages', async () => {
+    let catalogReads = 0;
+    http.route({
+      match: ANILIST,
+      respond: async (request) => {
+        const { query, variables } = (await request.json()) as {
+          query: string;
+          variables: { page: number; genre?: string };
+        };
+        if (query.includes('MediaFilterCatalog')) {
+          catalogReads++;
+          if (catalogReads === 1) return Response.json({ data: { GenreCollection: [] } });
+          return Response.json({
+            data: { GenreCollection: ['Action'], MediaTagCollection: [{ name: 'Seinen' }] },
+          });
+        }
+        return Response.json({
+          data: {
+            Page: {
+              pageInfo: { currentPage: variables.page, hasNextPage: false, perPage: 20 },
+              media: variables.genre === 'Action' ? [mediaNode(1)] : [],
+            },
+          },
+        });
+      },
+    });
+    const genre = { media_type: 'MANGA', genre: 'sEiNeN' } as const;
+    const failedCatalog = await runToolContract(animeSearchMedia, genre);
+    expect(failedCatalog.structuredContent).toMatchObject({
+      total_results: 0,
+      notice: expect.stringContaining('Try broadening the search'),
+    });
+    expect(contentText(failedCatalog)).toContain('Try broadening the search');
+    expect(catalogReads).toBe(1);
+
+    const laterPage = await runToolContract(animeSearchMedia, { ...genre, page: 2 });
+    expect(laterPage.structuredContent).toMatchObject({ total_results: null });
+    expect(contentText(laterPage)).toContain('Page 2 is past the end');
+    await runToolContract(animeSearchMedia, { ...genre, genre: 'Action' });
+    expect(catalogReads).toBe(1);
+
+    const rankings = await runToolContract(animeGetRankings, { ...genre, mode: 'top' });
+    const search = await runToolContract(animeSearchMedia, genre);
+    for (const result of [rankings, search]) {
+      expect(result.structuredContent).toMatchObject({
+        total_results: 0,
+        notice: expect.stringContaining('Try the same value in tag instead of genre'),
+      });
+      expect(contentText(result)).toContain('Try the same value in tag instead of genre');
+    }
+    expect(catalogReads).toBe(2);
+    expect(jikanCalls()).toHaveLength(0);
+  });
+  it.each([{ season: 'FALL' }, { season_year: 2020 }] as const)(
+    'rejects manga broadcast filters before any upstream call: %j',
+    async (filter) => {
+      const result = await runToolContract(animeSearchMedia, {
+        media_type: 'MANGA',
+        genre: 'Romance',
+        ...filter,
+      });
+      expect(result.structuredContent).toMatchObject({
+        error: {
+          data: {
+            reason: 'anime_only_season',
+            recovery: { hint: expect.stringContaining('start_year') },
+          },
+        },
+      });
+      expect(contentText(result)).toContain('anime_only_season');
+      expect(contentText(result)).toContain('start_year');
+      expect(http.calls).toHaveLength(0);
+    },
+  );
+
+  it('echoes normalized release filters on both surfaces when a search finds results', async () => {
+    http.route({
+      method: 'POST',
+      match: ANILIST,
+      respond: Response.json({
+        data: {
+          Page: {
+            pageInfo: { currentPage: 1, hasNextPage: false, perPage: 20 },
+            media: [{ ...mediaNode(1), type: 'MANGA', countryOfOrigin: 'KR' }],
+          },
+        },
+      }),
+    });
+    const result = await runToolContract(animeSearchMedia, {
+      media_type: 'MANGA',
+      start_year: 2020,
+      country_of_origin: ' kr ',
+    });
+    const applied = 'start_year=2020, country_of_origin=KR';
+    expect(result.structuredContent).toMatchObject({ total_results: 1, effectiveQuery: applied });
+    expect(contentText(result)).toContain(`Query: \`${applied}\``);
+  });
+
+  it.each([
+    [
+      { start_year: 2020 },
+      { startDateGreater: 20199999, startDateLesser: 20210000 },
+      'start_year=2020',
+    ],
+    [{ country_of_origin: ' kr ' }, { countryOfOrigin: 'KR' }, 'country_of_origin=KR'],
+  ])(
+    'uses %j as a standalone manga filter and echoes it on an empty page',
+    async (input, expected, echo) => {
+      http.route({
+        method: 'POST',
+        match: ANILIST,
+        respond: () =>
+          Response.json({
+            data: {
+              Page: { pageInfo: { currentPage: 1, hasNextPage: false, perPage: 20 }, media: [] },
+            },
+          }),
+      });
+      const result = await runToolContract(animeSearchMedia, { media_type: 'MANGA', ...input });
+      expect(result.structuredContent).toMatchObject({
+        source: 'anilist',
+        total_results: 0,
+        notice: expect.stringContaining(echo),
+        effectiveQuery: echo,
+      });
+      expect(contentText(result)).toContain(echo);
+      await expect(variablesOf(anilistCalls()[0]!.request)).resolves.toMatchObject(expected);
+      await runToolContract(animeSearchMedia, {
+        media_type: 'MANGA',
+        query: 'unmatched',
+        ...input,
+      });
+      expect(jikanCalls()).toHaveLength(0);
+    },
+  );
+
+  it.each([
+    { start_year: 2020.5 },
+    { start_year: 999 },
+    { country_of_origin: 'JPN' },
+    { country_of_origin: '1P' },
+  ])('rejects invalid release filters before upstream calls: %j', async (input) => {
+    const result = await runToolContract(animeSearchMedia, {
+      media_type: 'ANIME',
+      query: 'title',
+      ...input,
+    });
+    expect(result.structuredContent).toMatchObject({
+      error: { code: JsonRpcErrorCode.InvalidParams },
+    });
+    expect(http.calls).toHaveLength(0);
+  });
+  it('allows manga discovery when the broadcast season is blank', async () => {
+    http.route({
+      method: 'POST',
+      match: ANILIST,
+      respond: Response.json({
+        data: {
+          Page: {
+            pageInfo: { currentPage: 1, hasNextPage: false, perPage: 20 },
+            media: [{ ...mediaNode(1), type: 'MANGA' }],
+          },
+        },
+      }),
+    });
+    const result = await runToolContract(animeSearchMedia, {
+      media_type: 'MANGA',
+      genre: 'Romance',
+      season: '',
+    });
+    expect(result.structuredContent).toMatchObject({ source: 'anilist', total_results: 1 });
+    expect(contentText(result)).toContain('1 total');
+    await expect(variablesOf(anilistCalls()[0]!.request)).resolves.not.toHaveProperty('season');
+    expect(jikanCalls()).toHaveLength(0);
+  });
   it.each<{ sort: Array<'' | 'SCORE_DESC'> }>([{ sort: ['', 'SCORE_DESC'] }, { sort: [''] }])(
     'normalizes blank enum values before upstream selection: %j',
     async ({ sort }) => {
@@ -284,8 +643,8 @@ describe('anime_search_media over the wire', () => {
             });
           }
           const media = [
-            { ...mediaNode(501), idMal: 501, isAdult: false },
-            { ...mediaNode(502), idMal: 502, isAdult: true },
+            { ...mediaNode(501), idMal: 501, isAdult: false, countryOfOrigin: 'KR' },
+            { ...mediaNode(502), idMal: 502, isAdult: true, countryOfOrigin: null },
           ].filter((node) => variables.isAdult !== false || !node.isAdult);
           return Response.json({ data: { Page: { media } } });
         },
@@ -341,10 +700,12 @@ describe('anime_search_media over the wire', () => {
     expect(result.structuredContent).toMatchObject({
       source: 'jikan',
       results: [
-        { id: 501, is_adult: false },
-        { id: 502, is_adult: true },
+        { id: 501, is_adult: false, country_of_origin: 'KR' },
+        { id: 502, is_adult: true, country_of_origin: null },
       ],
     });
+    expect(contentText(result)).toContain('country_of_origin: KR');
+    expect(contentText(result)).toContain('country_of_origin: N/A');
     expect(new URL(jikanCalls()[0]!.request.url).searchParams.has('sfw')).toBe(false);
   });
 

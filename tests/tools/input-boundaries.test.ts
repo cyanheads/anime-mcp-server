@@ -89,6 +89,21 @@ describe('GraphQL Int IDs', () => {
       expect(anilist.getRankings).not.toHaveBeenCalled();
     },
   );
+  it.each(['character_id', 'voice_actor_id'])(
+    'enforces the person %s boundary before upstream work',
+    async (field) => {
+      const definition = named('anime_find_characters');
+      expect(definition.input.safeParse({ [field]: 2147483647 }).success).toBe(true);
+      expect(z.toJSONSchema(definition.input).properties?.[field]).toMatchObject({
+        maximum: 2147483647,
+      });
+      for (const id of [2147483648, 0, -1, 1.5]) {
+        const result = await runToolContract(definition, { [field]: id });
+        expect(result.structuredContent).toMatchObject({ error: { code: -32602 } });
+      }
+      expect(http.calls).toHaveLength(0);
+    },
+  );
 });
 
 describe('anime-only ranking seasons', () => {

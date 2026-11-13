@@ -32,10 +32,7 @@ function distinctTitles(edges: StudioMediaEdge[]): { node: MediaNode; isMainStud
 
 export const animeGetStudio = tool('anime_get_studio', {
   description:
-    "A studio's full filmography by name or AniList studio ID. " +
-    'Returns all titles the studio produced, sortable by year or score, ' +
-    'with format, status, and episode count. ' +
-    'Provide "name" for a name-based search, or "id" for direct lookup by AniList studio ID.',
+    "Get a studio's filmography by name or AniList studio ID, sortable by year or score. Includes main and co-credits by default. Use main_only to limit the filmography to titles where the studio has a main credit.",
   annotations: { readOnlyHint: true, openWorldHint: true },
 
   input: z.object({
@@ -53,7 +50,13 @@ export const animeGetStudio = tool('anime_get_studio', {
       .max(2147483647)
       .optional()
       .describe(
-        'AniList studio ID for direct lookup. More precise than name search. Send either id or name, not both.',
+        'AniList studio ID from anime_get_media studios[].id or a studio name lookup (studio_id). Provide either id or name.',
+      ),
+    main_only: z
+      .boolean()
+      .default(false)
+      .describe(
+        'Return only main studio credits. By default, includes main credits and co-credits.',
       ),
     sort: z
       .enum(['POPULARITY_DESC', 'SCORE_DESC', 'START_DATE_DESC', 'START_DATE'])
@@ -178,24 +181,21 @@ export const animeGetStudio = tool('anime_get_studio', {
       throw ctx.fail('missing_identifier', 'Provide either name or id to look up a studio');
     }
 
-    let studio: Awaited<ReturnType<typeof anilist.getStudioById>>;
+    const options = {
+      sort: input.sort || 'POPULARITY_DESC',
+      page: input.page,
+      perPage: input.per_page,
+      mainOnly: input.main_only,
+      signal: ctx.signal,
+    };
 
+    let studio: Awaited<ReturnType<typeof anilist.getStudioById>>;
     if (input.id !== undefined) {
       ctx.log.info('Fetching studio by ID', { id: input.id });
-      studio = await anilist.getStudioById({
-        id: input.id,
-        sort: input.sort || 'POPULARITY_DESC',
-        page: input.page,
-        perPage: input.per_page,
-      });
+      studio = await anilist.getStudioById({ id: input.id, ...options });
     } else {
       ctx.log.info('Searching studio by name', { name });
-      studio = await anilist.searchStudio({
-        name: name ?? '',
-        sort: input.sort || 'POPULARITY_DESC',
-        page: input.page,
-        perPage: input.per_page,
-      });
+      studio = await anilist.searchStudio({ name: name ?? '', ...options });
     }
 
     if (!studio) {

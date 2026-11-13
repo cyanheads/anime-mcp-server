@@ -115,6 +115,7 @@ export interface MediaRelationEdge {
 /** A lightweight media node used in relation graphs and recommendations. */
 export interface MediaNode {
   chapters: number | null;
+  countryOfOrigin: string | null;
   coverImage: CoverImage | null;
   episodes: number | null;
   format: MediaFormat | null;
@@ -135,6 +136,7 @@ export interface MediaDetail extends MediaNode {
   averageScore: number | null;
   bannerImage: string | null;
   description: string | null;
+  duration: number | null;
   endDate: { year: number | null; month: number | null; day: number | null } | null;
   externalLinks: ExternalLink[];
   favourites: number | null;
@@ -155,6 +157,7 @@ export interface MediaDetail extends MediaNode {
   source: string | null;
   startDate: { year: number | null; month: number | null; day: number | null } | null;
   studios: { edges: StudioEdge[] };
+  synonyms: string[];
   tags: MediaTag[];
   trailer: { id: string; site: string } | null;
 }
@@ -235,6 +238,25 @@ export interface CharacterWithMedia {
   };
   name: { full: string | null; native: string | null };
   siteUrl: string | null;
+}
+
+/** One name match and its most popular associated work, when available. */
+export interface PersonSuggestion {
+  id: number;
+  name: CharacterWithMedia['name'];
+  popularMedia: Pick<MediaNode, 'id' | 'title'> | null;
+}
+
+/** The first name match page, independent of the selected person's role page. */
+export interface PersonSuggestions {
+  hasNextPage: boolean;
+  matches: PersonSuggestion[];
+}
+
+/** AniList's genre and media tag vocabulary for advisory lookups. */
+export interface MediaFilterCatalog {
+  genres: readonly string[];
+  tags: readonly string[];
 }
 
 /** A recommendation node. */

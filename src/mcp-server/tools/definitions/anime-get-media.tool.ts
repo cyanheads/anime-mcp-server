@@ -12,16 +12,15 @@ import {
   escapeMarkdownInline as text,
 } from '@cyanheads/mcp-ts-core/utils';
 import * as anilist from '@/services/anilist/anilist-service.js';
+import type { MediaDetail } from '@/services/anilist/types.js';
 import * as jikan from '@/services/jikan/jikan-service.js';
 import * as kitsu from '@/services/kitsu/kitsu-service.js';
-import { fullTextJson, headingText } from '../render-text.js';
+import { mergeStreamingLinks } from '@/services/streaming-links.js';
+import { formatAiringCountdown, fullTextJson, headingText } from '../render-text.js';
 
 export const animeGetMedia = tool('anime_get_media', {
   description:
-    'Full detail for one anime or manga by AniList ID. Returns synopsis, format, episode/chapter count, ' +
-    'status, season, studios, source material, genres and tags (spoiler-flagged), ' +
-    'AniList and MAL scores side by side, streaming links, cover/banner, and direct relations. ' +
-    'Use anime_search_media first to find the AniList ID.',
+    'Full detail for one anime or manga by AniList ID. Returns synopsis, alternate titles, release dates, episode duration, country of origin, trailer, studios, tags, AniList and MAL scores, streaming links, and direct relations. Adult roots and adult relations require include_adult: true. Use anime_search_media first to find the AniList ID.',
   annotations: { readOnlyHint: true, idempotentHint: true },
 
   input: z.object({
@@ -62,6 +61,31 @@ export const animeGetMedia = tool('anime_get_media', {
     format: z.string().nullable().describe('Format: TV, MOVIE, OVA, ONA, MANGA, NOVEL, etc.'),
     status: z.string().nullable().describe('Production status.'),
     season: z.string().nullable().describe('Broadcast season label, e.g. "FALL 2023", or null.'),
+    start_date: z
+      .string()
+      .nullable()
+      .describe(
+        'Release or publication start date at known precision: YYYY, YYYY-MM, or YYYY-MM-DD.',
+      ),
+    end_date: z
+      .string()
+      .nullable()
+      .describe(
+        'Release or publication end date at known precision: YYYY, YYYY-MM, or YYYY-MM-DD.',
+      ),
+    duration_minutes: z
+      .number()
+      .int()
+      .nullable()
+      .describe('Typical anime episode duration in minutes, or null.'),
+    country_of_origin: z
+      .string()
+      .nullable()
+      .describe('AniList country of origin as an ISO 3166-1 alpha-2 code, or null.'),
+    synonyms: z
+      .array(z.string().describe('An alternate title.'))
+      .describe('Alternate titles from AniList.'),
+    trailer_url: z.string().nullable().describe('Trailer URL for a recognized provider, or null.'),
     description: z.string().nullable().describe('Normalized full plot synopsis text, or null.'),
     source: z
       .string()
@@ -185,7 +209,20 @@ export const animeGetMedia = tool('anime_get_media', {
       .describe('Provenance: which sources contributed data to this response.'),
   }),
 
+  enrichment: {
+    notice: z
+      .string()
+      .optional()
+      .describe('Adult relations omitted and optional sources unavailable.'),
+  },
+
   errors: [
+    {
+      reason: 'adult_content',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'The requested title is adult content and include_adult is false',
+      recovery: 'Retry the same ID with include_adult: true to include adult titles.',
+    },
     {
       reason: 'not_found',
       code: JsonRpcErrorCode.NotFound,
@@ -197,73 +234,48 @@ export const animeGetMedia = tool('anime_get_media', {
   async handler(input, ctx) {
     ctx.log.info('Fetching media detail', { id: input.id });
 
-    const detail = await anilist.getMediaById(input.id, input.include_adult);
+    const detail = await anilist.getMediaById(input.id, true, ctx.signal);
+    ctx.signal.throwIfAborted();
 
     if (!detail) {
       throw ctx.fail('not_found', `No media found with AniList ID ${input.id}`);
     }
+    if (detail.isAdult && !input.include_adult) {
+      throw ctx.fail('adult_content', 'The requested title is adult content.');
+    }
 
     const mediaType = detail.type;
 
-    // Fan out to Jikan + Kitsu in parallel (supplements only)
+    const supplementOptions = { signal: ctx.signal, deadlineMs: 5000, maxRetries: 0 };
     const [jikanResult, kitsuResult] = await Promise.allSettled([
-      detail.idMal ? jikan.getMediaFull(detail.idMal, mediaType) : Promise.resolve(null),
+      detail.idMal ? jikan.getMediaFull(detail.idMal, mediaType, supplementOptions) : null,
       mediaType === 'ANIME' && detail.idMal
-        ? kitsu.getAnimeStreamingByMalId(detail.idMal)
-        : Promise.resolve(null),
+        ? kitsu.getAnimeStreamingByMalId(detail.idMal, supplementOptions)
+        : null,
     ]);
+    ctx.signal.throwIfAborted();
 
     const jikanData = jikanResult.status === 'fulfilled' ? jikanResult.value : null;
     const kitsuData = kitsuResult.status === 'fulfilled' ? kitsuResult.value : null;
 
-    if (jikanResult.status === 'rejected') {
-      ctx.log.warning('Jikan supplement failed', {
-        id: input.id,
-        error: String(jikanResult.reason),
-      });
+    const notices: string[] = [];
+    if (jikanResult.status === 'rejected') notices.push('Jikan MAL data is unavailable.');
+    if (kitsuResult.status === 'rejected') notices.push('Kitsu streaming data is unavailable.');
+    const streamingLinks =
+      mediaType === 'ANIME'
+        ? mergeStreamingLinks(kitsuData?.streamingLinks ?? [], detail.externalLinks ?? [])
+        : [];
+    const relations = detail.relations?.edges ?? [];
+    const visibleRelations = input.include_adult
+      ? relations
+      : relations.filter(({ node }) => !node.isAdult);
+    const omittedRelations = relations.length - visibleRelations.length;
+    if (omittedRelations > 0) {
+      notices.push(
+        `Omitted ${omittedRelations} adult relation ${omittedRelations === 1 ? 'entry' : 'entries'}. Set include_adult: true to include adult titles.`,
+      );
     }
-    if (kitsuResult.status === 'rejected') {
-      ctx.log.warning('Kitsu supplement failed', {
-        id: input.id,
-        error: String(kitsuResult.reason),
-      });
-    }
-
-    // Build streaming links: Kitsu primary, AniList externalLinks fallback
-    const streamingLinks: Array<{
-      site: string;
-      url: string;
-      subs: string[];
-      dubs: string[];
-      source: 'kitsu' | 'anilist';
-    }> = [];
-
-    if (kitsuData?.streamingLinks?.length) {
-      for (const link of kitsuData.streamingLinks) {
-        // Extract site name from URL
-        const site = extractSiteName(link.url);
-        streamingLinks.push({
-          site,
-          url: link.url,
-          subs: link.subs,
-          dubs: link.dubs,
-          source: 'kitsu',
-        });
-      }
-    } else if (mediaType === 'ANIME') {
-      // Fall back to AniList externalLinks
-      for (const link of detail.externalLinks ?? []) {
-        if (link.type === 'STREAMING' && link.url) {
-          streamingLinks.push({
-            site: link.site,
-            url: link.url,
-            subs: [],
-            dubs: [],
-            source: 'anilist',
-          });
-        }
-      }
-    }
+    if (notices.length) ctx.enrich.notice(notices.join(' '));
 
     const season =
       detail.season && detail.seasonYear
@@ -283,6 +295,12 @@ export const animeGetMedia = tool('anime_get_media', {
       format: detail.format ?? null,
       status: detail.status ?? null,
       season,
+      start_date: formatFuzzyDate(detail.startDate),
+      end_date: formatFuzzyDate(detail.endDate),
+      duration_minutes: detail.duration ?? null,
+      country_of_origin: detail.countryOfOrigin ?? null,
+      synonyms: detail.synonyms ?? [],
+      trailer_url: trailerUrl(detail.trailer),
       description: detail.description ?? null,
       source: detail.source ?? null,
       episodes: detail.episodes ?? null,
@@ -312,7 +330,7 @@ export const animeGetMedia = tool('anime_get_media', {
         mal_popularity: jikanData?.popularity ?? null,
       },
       streaming_links: streamingLinks,
-      relations: (detail.relations?.edges ?? []).map((e) => ({
+      relations: visibleRelations.map((e) => ({
         relation_type: e.relationType,
         id: e.node.id,
         title: e.node.title.romaji,
@@ -358,6 +376,11 @@ export const animeGetMedia = tool('anime_get_media', {
     if (result.type === 'MANGA' && result.chapters) meta.push(`${result.chapters} chapters`);
     if (result.source) meta.push(`Source: ${text(result.source)}`);
     if (meta.length) lines.push(meta.join(' · '), '');
+    lines.push(
+      `**Release dates:** ${text(result.start_date ?? 'unknown')} to ${text(result.end_date ?? 'unknown')} · **Duration:** ${result.duration_minutes === null ? 'unknown' : `${result.duration_minutes} min`} · **Origin:** ${text(result.country_of_origin ?? 'unknown')}`,
+      `**Alternate titles:** ${result.synonyms.length ? result.synonyms.map(text).join(', ') : 'none'} · **Trailer:** ${result.trailer_url ? markdownLink('watch', result.trailer_url) : 'none'}`,
+      '',
+    );
 
     if (result.description) {
       lines.push(text(result.description.slice(0, 500)) + (omittedCharacters > 0 ? '…' : ''), '');
@@ -411,9 +434,7 @@ export const animeGetMedia = tool('anime_get_media', {
     // Next airing
     if (result.next_airing) {
       const seconds = result.next_airing.time_until_airing_seconds;
-      const hours = Math.floor(seconds / 3600);
-      const days = Math.floor(hours / 24);
-      const countdown = days > 0 ? `${days}d ${hours % 24}h` : `${hours}h`;
+      const countdown = formatAiringCountdown(seconds);
       lines.push(
         '',
         `**Next airing:** Episode ${result.next_airing.episode} in ${countdown} (${text(result.next_airing.airing_at_utc)})`,
@@ -498,26 +519,22 @@ export const animeGetMedia = tool('anime_get_media', {
   },
 });
 
-/** Extract a human-readable site name from a URL. */
-function extractSiteName(url: string): string {
-  try {
-    const hostname = new URL(url).hostname.replace(/^www\./, '');
-    const known: Record<string, string> = {
-      'crunchyroll.com': 'Crunchyroll',
-      'funimation.com': 'Funimation',
-      'netflix.com': 'Netflix',
-      'hidive.com': 'HIDIVE',
-      'hulu.com': 'Hulu',
-      'amazon.com': 'Amazon Prime',
-      'primevideo.com': 'Amazon Prime',
-      'vrv.co': 'VRV',
-      'youtube.com': 'YouTube',
-      'wakanim.tv': 'Wakanim',
-      'bilibili.com': 'Bilibili',
-      'animelab.com': 'AnimeLab',
-    };
-    return known[hostname] ?? hostname;
-  } catch {
-    return url;
+function formatFuzzyDate(date: MediaDetail['startDate']): string | null {
+  if (date?.year == null) return null;
+  const year = String(date.year).padStart(4, '0');
+  if (date.month == null) return year;
+  const yearMonth = `${year}-${String(date.month).padStart(2, '0')}`;
+  return date.day == null ? yearMonth : `${yearMonth}-${String(date.day).padStart(2, '0')}`;
+}
+
+function trailerUrl(trailer: MediaDetail['trailer']): string | null {
+  if (typeof trailer?.id !== 'string') return null;
+  const { id, site } = trailer;
+  if (site === 'youtube' && id.length === 11 && /^[A-Za-z0-9_-]{11}(?![\s\S])/.test(id)) {
+    return `https://www.youtube.com/watch?v=${id}`;
   }
+  if (site === 'dailymotion' && id.length <= 32 && /^x[A-Za-z0-9]{1,31}(?![\s\S])/.test(id)) {
+    return `https://www.dailymotion.com/video/${id}`;
+  }
+  return null;
 }

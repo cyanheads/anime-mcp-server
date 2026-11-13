@@ -29,6 +29,7 @@ import * as jikan from '@/services/jikan/jikan-service.js';
 const steinsGate: MediaNode = {
   id: 11757,
   idMal: 9253,
+  countryOfOrigin: 'JP',
   type: 'ANIME' as const,
   format: 'TV',
   status: 'FINISHED',
@@ -112,8 +113,12 @@ describe('animeSearchMedia', () => {
       media: [{ ...steinsGate, title: { romaji: title, english: title, native: null } }],
     });
     const result = await runToolContract(animeSearchMedia, { media_type: 'ANIME', query: 'title' });
-    expect(result.structuredContent).toMatchObject({ results: [{ title_romaji: title }] });
-    expectLiteralProse(result.content, title);
+    expect(result.structuredContent).toMatchObject({
+      results: [{ title_romaji: title, country_of_origin: 'JP' }],
+    });
+    expect(contentText(result)).toContain('country_of_origin: JP');
+    expectLiteralProse(result.content.slice(0, 1), title);
+    expect(contentText(result)).toContain('Query: `query="title"`');
     expectMarkdownDestination(result.content, 'image', 'https://example.com/cover.jpg');
   });
 
@@ -146,13 +151,16 @@ describe('animeSearchMedia', () => {
     expect(result.source).toBe('jikan');
     expect(result.results).toHaveLength(1);
     expect(result.results[0]!.id_mal).toBe(9253);
-    expect(jikan.searchMedia).toHaveBeenCalledWith({
-      query: 'Steins;Gate',
-      mediaType: 'ANIME',
-      page: 1,
-      limit: 20,
-      sfw: true,
-    });
+    expect(jikan.searchMedia).toHaveBeenCalledWith(
+      {
+        query: 'Steins;Gate',
+        mediaType: 'ANIME',
+        page: 1,
+        limit: 20,
+        sfw: true,
+      },
+      { signal: expect.any(AbortSignal), maxRetries: 0 },
+    );
     expect(anilist.searchMedia).toHaveBeenCalledOnce();
   });
 
@@ -181,13 +189,16 @@ describe('animeSearchMedia', () => {
     const text = (animeSearchMedia.format!(result)[0] as { text: string }).text;
 
     expect(lookup).toHaveBeenCalledOnce();
-    expect(lookup).toHaveBeenCalledWith([9253, 999_999], 'ANIME', false);
+    expect(lookup).toHaveBeenCalledWith([9253, 999_999], 'ANIME', false, expect.any(AbortSignal), {
+      maxRetries: 0,
+    });
     expect(result).toMatchObject({
       source: 'jikan',
-      results: [{ id: 314, id_mal: 9253 }],
+      results: [{ id: 314, id_mal: 9253, country_of_origin: 'JP' }],
     });
     expect(result.results.every((entry) => entry.id > 0)).toBe(true);
     expect(text).toContain('[AL:314/MAL:9253]');
+    expect(text).toContain('country_of_origin: JP');
     expect(text).not.toContain('AL:0');
     expect(text).not.toContain('MAL:999999');
   });
@@ -277,6 +288,7 @@ describe('animeSearchMedia', () => {
       {
         id: 999,
         idMal: null,
+        countryOfOrigin: null,
         type: 'ANIME' as const,
         format: null,
         status: null,
@@ -517,7 +529,10 @@ describe('animeSearchMedia', () => {
 
       const result = await animeSearchMedia.handler(input, ctx);
 
-      expect(jikan.searchMedia).toHaveBeenCalledWith(expect.objectContaining({ page: 2 }));
+      expect(jikan.searchMedia).toHaveBeenCalledWith(
+        expect.objectContaining({ page: 2 }),
+        expect.anything(),
+      );
       expect(result).toMatchObject({ source: 'jikan', page: 2 });
     });
 
@@ -698,8 +713,17 @@ describe('animeSearchMedia', () => {
 
         await animeSearchMedia.handler(input, ctx);
 
-        expect(jikan.searchMedia).toHaveBeenCalledWith(expect.objectContaining({ sfw }));
-        expect(anilist.getMediaByMalIds).toHaveBeenCalledWith([9253], 'MANGA', includeAdult);
+        expect(jikan.searchMedia).toHaveBeenCalledWith(
+          expect.objectContaining({ sfw }),
+          expect.anything(),
+        );
+        expect(anilist.getMediaByMalIds).toHaveBeenCalledWith(
+          [9253],
+          'MANGA',
+          includeAdult,
+          expect.any(AbortSignal),
+          { maxRetries: 0 },
+        );
       },
     );
 
@@ -716,7 +740,10 @@ describe('animeSearchMedia', () => {
 
       const result = await animeSearchMedia.handler(input, ctx);
 
-      expect(jikan.searchMedia).toHaveBeenCalledWith(expect.objectContaining({ limit: 25 }));
+      expect(jikan.searchMedia).toHaveBeenCalledWith(
+        expect.objectContaining({ limit: 25 }),
+        expect.anything(),
+      );
       expect(result.source).toBe('jikan');
     });
 

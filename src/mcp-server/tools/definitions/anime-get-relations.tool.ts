@@ -8,7 +8,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { markdownImage, escapeMarkdownInline as text } from '@cyanheads/mcp-ts-core/utils';
 import * as anilist from '@/services/anilist/anilist-service.js';
-import type { MediaNode, MediaRelationEdge, MediaRelationType } from '@/services/anilist/types.js';
+import type { MediaNode, MediaRelationType } from '@/services/anilist/types.js';
 
 /** Relation priority for the presentation heuristic. Lower sorts earlier. */
 const RELATION_ORDER: Record<string, number> = {
@@ -53,6 +53,10 @@ export const animeGetRelations = tool('anime_get_relations', {
       .min(1)
       .max(2147483647)
       .describe('AniList media ID of any entry in the franchise.'),
+    include_adult: z
+      .boolean()
+      .default(false)
+      .describe('Include adult roots and related titles. Default false.'),
     max_depth: z
       .number()
       .int()
@@ -92,6 +96,10 @@ export const animeGetRelations = tool('anime_get_relations', {
             chapters: z.number().int().nullable().describe('Chapter count, or null.'),
             mean_score: z.number().nullable().describe('AniList mean score 0–100, or null.'),
             is_adult: z.boolean().describe('Whether marked adult/NSFW.'),
+            country_of_origin: z
+              .string()
+              .nullable()
+              .describe('Country of origin as an ISO alpha-2 code, or null.'),
             cover_image_url: z.string().nullable().describe('Cover image URL, or null.'),
             relation_to_root: z
               .string()
@@ -130,6 +138,10 @@ export const animeGetRelations = tool('anime_get_relations', {
   }),
 
   enrichment: {
+    notice: z
+      .string()
+      .optional()
+      .describe('Count of identified adult titles omitted from traversal.'),
     totalCount: z
       .number()
       .int()
@@ -137,6 +149,12 @@ export const animeGetRelations = tool('anime_get_relations', {
   },
 
   errors: [
+    {
+      reason: 'adult_content',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'The root is adult content and include_adult is false',
+      recovery: 'Retry the same ID with include_adult: true to include adult titles.',
+    },
     {
       reason: 'not_found',
       code: JsonRpcErrorCode.NotFound,
@@ -147,6 +165,11 @@ export const animeGetRelations = tool('anime_get_relations', {
 
   async handler(input, ctx) {
     ctx.log.info('Walking franchise relations', { id: input.id, maxDepth: input.max_depth });
+    const rootMedia = await anilist.getMediaById(input.id, true, ctx.signal);
+    if (!rootMedia) throw ctx.fail('not_found', `No media found with AniList ID ${input.id}`);
+    if (rootMedia.isAdult && !input.include_adult) {
+      throw ctx.fail('adult_content', 'The requested franchise root is adult content.');
+    }
 
     type VisitedEntry = {
       node: MediaNode;
@@ -156,24 +179,26 @@ export const animeGetRelations = tool('anime_get_relations', {
       path: number[];
     };
 
-    // `enqueued` prevents duplicate BFS queue entries. `visited` is the result map —
-    // populated as each node is discovered (from parent edge data) and updated with
-    // the correct depth as traversal proceeds.
-    const enqueued = new Set<number>([input.id]);
+    // Record each node when discovered so its first path is the shortest.
+    const rootPath = [input.id];
     const visited = new Map<number, VisitedEntry>();
+    visited.set(input.id, {
+      node: rootMedia,
+      relationType: null,
+      depth: 0,
+      parentId: null,
+      path: rootPath,
+    });
+    const omittedAdultIds = new Set<number>();
     let maxDepthReached = 0;
 
     // BFS queue: items whose relations we still need to fetch
     const toVisit: Array<{ id: number; depth: number; path: number[] }> = [
-      { id: input.id, depth: 0, path: [input.id] },
+      { id: input.id, depth: 0, path: rootPath },
     ];
 
-    while (toVisit.length > 0) {
-      const item = toVisit.shift();
-      if (item === undefined) break;
-      if (item.depth >= input.max_depth) continue;
-
-      const edges: MediaRelationEdge[] | null = await anilist.getMediaRelations(item.id);
+    for (let item = toVisit.shift(); item !== undefined; item = toVisit.shift()) {
+      const edges = await anilist.getMediaRelations(item.id, ctx.signal);
 
       if (item.depth === 0 && edges === null) {
         throw ctx.fail('not_found', `No media found with AniList ID ${input.id}`);
@@ -181,37 +206,25 @@ export const animeGetRelations = tool('anime_get_relations', {
 
       if (edges === null) continue;
 
-      // For the root, fetch full info to have a complete node
-      if (item.depth === 0) {
-        const rootMedia = await anilist.getMediaById(input.id);
-        if (!rootMedia) {
-          throw ctx.fail('not_found', `No media found with AniList ID ${input.id}`);
-        }
-        visited.set(input.id, {
-          node: rootMedia,
-          relationType: null,
-          depth: 0,
-          parentId: null,
-          path: [input.id],
-        });
-      }
-
-      // Process edges: register unseen nodes and enqueue for further traversal
+      const depth = item.depth + 1;
       for (const edge of edges) {
         const childId = edge.node.id;
-        if (!enqueued.has(childId)) {
-          enqueued.add(childId);
-          visited.set(childId, {
-            node: edge.node,
-            relationType: edge.relationType,
-            depth: item.depth + 1,
-            parentId: item.id,
-            path: [...item.path, childId],
-          });
-          maxDepthReached = Math.max(maxDepthReached, item.depth + 1);
-          if (item.depth + 1 < input.max_depth) {
-            toVisit.push({ id: childId, depth: item.depth + 1, path: [...item.path, childId] });
-          }
+        if (edge.node.isAdult && !input.include_adult) {
+          omittedAdultIds.add(childId);
+          continue;
+        }
+        if (visited.has(childId)) continue;
+        const path = [...item.path, childId];
+        visited.set(childId, {
+          node: edge.node,
+          relationType: edge.relationType,
+          depth,
+          parentId: item.id,
+          path,
+        });
+        maxDepthReached = Math.max(maxDepthReached, depth);
+        if (depth < input.max_depth) {
+          toVisit.push({ id: childId, depth, path });
         }
       }
     }
@@ -219,6 +232,11 @@ export const animeGetRelations = tool('anime_get_relations', {
     // Presentation heuristic: main group first, then relation priority and year.
     const entries = Array.from(visited.values());
     ctx.enrich.total(visited.size);
+    if (omittedAdultIds.size) {
+      ctx.enrich.notice(
+        `Omitted ${omittedAdultIds.size} adult relation ${omittedAdultIds.size === 1 ? 'entry' : 'entries'}. Set include_adult: true to include adult titles.`,
+      );
+    }
     entries.sort((a, b) => {
       const category =
         Number(SUPPLEMENTARY_TYPES.has(a.relationType ?? '')) -
@@ -253,6 +271,7 @@ export const animeGetRelations = tool('anime_get_relations', {
         chapters: e.node.chapters ?? null,
         mean_score: e.node.meanScore ?? null,
         is_adult: e.node.isAdult,
+        country_of_origin: e.node.countryOfOrigin ?? null,
         cover_image_url: e.node.coverImage?.large ?? null,
         relation_to_root: e.depth === 1 ? e.relationType : null,
         depth: e.depth,
@@ -310,7 +329,7 @@ export const animeGetRelations = tool('anime_get_relations', {
         const chap = e.chapters !== null ? ` chapters:${e.chapters}` : '';
         lines.push(
           `${i + 1}. **${text(title)}** (${text(e.title ?? '?')}) [AL:${e.id}${malId}]${typeLabel}${fmt}${status}${score}${ep}${chap}${season}${seasonYear}${adult}${rel}`,
-          `   relation_to_root: ${text(e.relation_to_root ?? 'none')} | depth: ${e.depth} | parent_id: ${e.parent_id ?? 'none'} | relation_to_parent: ${text(e.relation_to_parent ?? 'none')} | path: ${e.path.join(' → ')} | is_root: ${e.is_root} | is_adult: ${e.is_adult}${cover}`,
+          `   relation_to_root: ${text(e.relation_to_root ?? 'none')} | depth: ${e.depth} | parent_id: ${e.parent_id ?? 'none'} | relation_to_parent: ${text(e.relation_to_parent ?? 'none')} | path: ${e.path.join(' → ')} | is_root: ${e.is_root} | is_adult: ${e.is_adult} | country_of_origin: ${text(e.country_of_origin ?? 'N/A')}${cover}`,
         );
       }
     }
@@ -334,7 +353,7 @@ export const animeGetRelations = tool('anime_get_relations', {
         const chap = e.chapters !== null ? ` chapters:${e.chapters}` : '';
         lines.push(
           `- **${text(title)}** (${text(e.title ?? '?')}) [AL:${e.id}${malId}]${typeLabel}${fmt}${status}${score}${chap}${season}${seasonYear}${adult}${rel}`,
-          `  relation_to_root: ${text(e.relation_to_root ?? 'none')} | depth: ${e.depth} | parent_id: ${e.parent_id ?? 'none'} | relation_to_parent: ${text(e.relation_to_parent ?? 'none')} | path: ${e.path.join(' → ')} | is_root: ${e.is_root} | is_adult: ${e.is_adult}${cover}`,
+          `  relation_to_root: ${text(e.relation_to_root ?? 'none')} | depth: ${e.depth} | parent_id: ${e.parent_id ?? 'none'} | relation_to_parent: ${text(e.relation_to_parent ?? 'none')} | path: ${e.path.join(' → ')} | is_root: ${e.is_root} | is_adult: ${e.is_adult} | country_of_origin: ${text(e.country_of_origin ?? 'N/A')}${cover}`,
         );
       }
     }

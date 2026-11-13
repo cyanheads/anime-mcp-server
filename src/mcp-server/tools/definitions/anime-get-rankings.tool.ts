@@ -189,6 +189,10 @@ export const animeGetRankings = tool('anime_get_rankings', {
             title: z.string().nullable().describe('Romanized title.'),
             title_english: z.string().nullable().describe('English title, or null.'),
             type: z.enum(['ANIME', 'MANGA']).describe('Media type.'),
+            country_of_origin: z
+              .string()
+              .nullable()
+              .describe('ISO 3166-1 alpha-2 country of origin, or null.'),
             format: z.string().nullable().describe('Format: TV, MOVIE, OVA, etc.'),
             status: z.string().nullable().describe('Production status.'),
             season: z.string().nullable().describe('Broadcast season label, or null.'),
@@ -234,6 +238,7 @@ export const animeGetRankings = tool('anime_get_rankings', {
       page: input.page,
       perPage: input.per_page,
       includeAdult: input.include_adult,
+      signal: ctx.signal,
     });
 
     const seasonLabel =
@@ -266,6 +271,10 @@ export const animeGetRankings = tool('anime_get_rankings', {
           ? pastEndNotice(currentPage, `the rankings for ${applied}`)
           : `No entries for ${applied}. Try removing genre, tag, or format filters, or check that the season/year combination exists.${tag ? ' tag must be an AniList tag name; genres such as "Action" or "Mecha" are not tags.' : ''}`,
       );
+      if (currentPage === 1 && genre) {
+        const advice = await anilist.getGenreAdvice(genre, ctx.signal);
+        if (advice) notices.push(advice);
+      }
     }
     if (nextPageOutOfReach({ page: currentPage, perPage, hasNextPage })) {
       notices.push(PAGE_DEPTH_EDGE_NOTICE);
@@ -288,6 +297,7 @@ export const animeGetRankings = tool('anime_get_rankings', {
         title: m.title.romaji,
         title_english: m.title.english,
         type: m.type,
+        country_of_origin: m.countryOfOrigin ?? null,
         format: m.format ?? null,
         status: m.status ?? null,
         season: m.season && m.seasonYear ? `${m.season} ${m.seasonYear}` : (m.season ?? null),
@@ -327,7 +337,7 @@ export const animeGetRankings = tool('anime_get_rankings', {
       const adult = entry.is_adult ? ' · [Adult]' : '';
       lines.push(
         `${entry.rank}. **${text(title)}** (${text(entry.title ?? '?')}) [AL:${entry.id}${entry.id_mal !== null ? `/MAL:${entry.id_mal}` : ''}]${fmt}${score}${ep}${chap}${adult}`,
-        `   status: ${text(entry.status ?? 'N/A')} | season: ${text(entry.season ?? 'N/A')} | cover: ${entry.cover_image_url ? markdownImage('cover', entry.cover_image_url) : 'none'}`,
+        `   status: ${text(entry.status ?? 'N/A')} | season: ${text(entry.season ?? 'N/A')} | country_of_origin: ${text(entry.country_of_origin ?? 'N/A')} | cover: ${entry.cover_image_url ? markdownImage('cover', entry.cover_image_url) : 'none'}`,
       );
     }
 
