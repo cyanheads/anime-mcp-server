@@ -118,12 +118,18 @@ mcpTest(
             Page: {
               pageInfo: { hasNextPage: true },
               matches: query.includes('matches: characters')
-                ? [{ id: 145, name, popularMedia: { edges: [{ node: { id: 20, title } }] } }]
+                ? [
+                    {
+                      id: 145,
+                      name,
+                      popularMedia: { edges: [{ node: { id: 20, isAdult: true, title } }] },
+                    },
+                  ]
                 : [
                     { id: 145879, name, popularMedia: null },
                     null,
                     { id: 900, name: null, popularMedia: { edges: [{ node: null }] } },
-                    { id: 901, popularMedia: { edges: [{ node: { id: 21 } }] } },
+                    { id: 901, popularMedia: { edges: [{ node: { id: 21, isAdult: false } }] } },
                   ],
             },
           },
@@ -131,7 +137,7 @@ mcpTest(
       },
     });
     await expect(anilist.searchCharacterSuggestions('Sakura', 5)).resolves.toEqual({
-      matches: [{ id: 145, name, popularMedia: { id: 20, title } }],
+      matches: [{ id: 145, name, popularMedia: { id: 20, isAdult: true, title } }],
       hasNextPage: true,
     });
     await expect(anilist.searchStaffSuggestions('Yuu Kobayashi', 5)).resolves.toEqual({
@@ -141,7 +147,11 @@ mcpTest(
         {
           id: 901,
           name: { full: null, native: null },
-          popularMedia: { id: 21, title: { romaji: null, english: null, native: null } },
+          popularMedia: {
+            id: 21,
+            isAdult: false,
+            title: { romaji: null, english: null, native: null },
+          },
         },
       ],
       hasNextPage: true,

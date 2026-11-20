@@ -194,7 +194,15 @@ describe('animeSearchMedia', () => {
     });
     expect(result).toMatchObject({
       source: 'jikan',
-      results: [{ id: 314, id_mal: 9253, country_of_origin: 'JP' }],
+      results: [
+        {
+          id: 314,
+          id_mal: 9253,
+          country_of_origin: 'JP',
+          title_native: 'シュタインズ・ゲート',
+          cover_image_url: 'https://example.com/cover.jpg',
+        },
+      ],
     });
     expect(result.results.every((entry) => entry.id > 0)).toBe(true);
     expect(text).toContain('[AL:314/MAL:9253]');
@@ -561,17 +569,22 @@ describe('animeSearchMedia', () => {
       expect(getEnrichment(ctx).notice).toContain('remove filters');
     });
 
-    it('carries the no-results notice when no fallback row resolves', async () => {
+    it('reports omitted rows on both surfaces when no fallback row resolves', async () => {
       vi.mocked(anilist.searchMedia).mockResolvedValue(emptyAnilistPage);
       vi.mocked(jikan.searchMedia).mockResolvedValue(mockJikanResult);
       vi.mocked(anilist.getMediaByMalIds).mockResolvedValue(new Map());
-      const ctx = createMockContext({ errors: animeSearchMedia.errors });
-      const input = animeSearchMedia.input.parse({ media_type: 'ANIME', query: 'Steins;Gate' });
-
-      const result = await animeSearchMedia.handler(input, ctx);
-
-      expect(result).toMatchObject({ source: 'jikan', results: [] });
-      expect(getEnrichment(ctx).notice).toContain('No results for query="Steins;Gate"');
+      const result = await runToolContract(animeSearchMedia, {
+        media_type: 'ANIME',
+        query: 'Steins;Gate',
+      });
+      expect(result.structuredContent).toMatchObject({
+        source: 'jikan',
+        results: [],
+        notice: 'Omitted 1 MyAnimeList row with no eligible AniList match.',
+      });
+      expect(contentText(result)).toContain(
+        'Omitted 1 MyAnimeList row with no eligible AniList match.',
+      );
     });
 
     it('carries the no-results notice when Jikan also finds nothing', async () => {

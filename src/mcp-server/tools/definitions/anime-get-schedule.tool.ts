@@ -27,17 +27,14 @@ const DEFAULT_DAYS_AHEAD = 7;
 
 export const animeGetSchedule = tool('anime_get_schedule', {
   description:
-    'Airing schedule for a season or upcoming episode window. ' +
-    '"season" mode returns all anime airing in a given season/year. ' +
-    '"upcoming" mode returns next episode for airing titles within a date window, with UTC timestamps.',
+    'List anime by AniList premiere season or upcoming episodes within a date window. Season mode lists titles that premiered in the specified season and year. Upcoming mode lists scheduled episodes with UTC timestamps.',
   annotations: { readOnlyHint: true, openWorldHint: true },
 
   input: z.object({
     mode: z
       .enum(['season', 'upcoming'])
       .describe(
-        '"season": all anime from a specific season/year. Requires season and season_year. ' +
-          '"upcoming": next airing episode for each currently-airing title within days_ahead window.',
+        '"season": anime that premiered in the specified season and year, using AniList’s season catalog. Requires season and season_year. "upcoming": episodes scheduled within the days_ahead window.',
       ),
     season: SeasonEnum.or(z.literal(''))
       .optional()
@@ -81,7 +78,7 @@ export const animeGetSchedule = tool('anime_get_schedule', {
       .string()
       .optional()
       .describe(
-        'Set when entries is empty — echoes the applied mode/season and how to broaden it, says the page is past the end of the list, or (upcoming mode) says every episode on the page was an adult title hidden by include_adult. Also set on the last season page AniList serves (its 5,000-entry reach) while has_next_page is still true.',
+        'Explains season coverage, an empty or out-of-range page, the AniList page-depth limit, or adult episodes hidden from an upcoming page.',
       ),
     totalCount: z
       .number()
@@ -222,7 +219,8 @@ export const animeGetSchedule = tool('anime_get_schedule', {
       if (nextPageOutOfReach({ page: currentPage, perPage, hasNextPage })) {
         notices.push(PAGE_DEPTH_EDGE_NOTICE);
       }
-      if (notices.length > 0) ctx.enrich.notice(notices.join(' '));
+      notices.push('Use upcoming mode for episodes from continuing series within its date window.');
+      ctx.enrich.notice(notices.join(' '));
 
       type SeasonMediaNode = (typeof page.media)[0] & {
         nextAiringEpisode?: { airingAt: number; episode: number; timeUntilAiring: number } | null;
@@ -266,14 +264,18 @@ export const animeGetSchedule = tool('anime_get_schedule', {
       .filter((schedule) => input.include_adult || !schedule.media.isAdult)
       .sort((a, b) => a.airingAt - b.airingAt);
 
+    const hidden = upcoming.airingSchedules.length - schedules.length;
     if (schedules.length === 0) {
-      const hidden = upcoming.airingSchedules.length;
       ctx.enrich.notice(
         hidden > 0
           ? `All ${hidden} episode(s) on page ${input.page} are adult titles, hidden because include_adult is false.${upcoming.hasNextPage ? ` Continue with page ${input.page + 1}.` : ''}`
           : input.page > 1
             ? pastEndNotice(input.page, `the ${daysAhead}-day upcoming window`)
             : `No upcoming episodes found within ${daysAhead} day(s). Try increasing days_ahead (max 30).`,
+      );
+    } else if (hidden > 0) {
+      ctx.enrich.notice(
+        `Omitted ${hidden} upcoming ${hidden === 1 ? 'episode' : 'episodes'} from adult titles on this page. Set include_adult: true to include adult titles.`,
       );
     }
 

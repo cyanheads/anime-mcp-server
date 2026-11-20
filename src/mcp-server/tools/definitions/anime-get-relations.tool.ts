@@ -1,6 +1,6 @@
 /**
  * @fileoverview anime_get_relations tool — depth-bounded franchise graph traversal.
- * BFS discovery paths with relation-priority/year ordering, a heuristic rather than chronology.
+ * BFS discovery paths with release-date ordering within each group.
  * @module mcp-server/tools/definitions/anime-get-relations.tool
  */
 
@@ -8,24 +8,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { markdownImage, escapeMarkdownInline as text } from '@cyanheads/mcp-ts-core/utils';
 import * as anilist from '@/services/anilist/anilist-service.js';
-import type { MediaNode, MediaRelationType } from '@/services/anilist/types.js';
-
-/** Relation priority for the presentation heuristic. Lower sorts earlier. */
-const RELATION_ORDER: Record<string, number> = {
-  SOURCE: 0,
-  ADAPTATION: 1,
-  PREQUEL: 2,
-  PARENT: 3,
-  SUMMARY: 4,
-  COMPILATION: 5,
-  CONTAINS: 6,
-  ALTERNATIVE: 7,
-  SIDE_STORY: 8,
-  CHARACTER: 9,
-  SPIN_OFF: 10,
-  OTHER: 11,
-  SEQUEL: 12,
-};
+import type { MediaRelationEdge, MediaRelationType } from '@/services/anilist/types.js';
 
 const SUPPLEMENTARY_TYPES = new Set([
   'SIDE_STORY',
@@ -40,10 +23,7 @@ const SUPPLEMENTARY_TYPES = new Set([
 
 export const animeGetRelations = tool('anime_get_relations', {
   description:
-    'Franchise untangler. Walks the related-works graph from a media ID across multiple hops — ' +
-    'sequels, prequels, side stories, movies, OVAs, source/adaptation — and returns them ordered ' +
-    'by a relation-priority/year heuristic, not a topological franchise chronology. ' +
-    'Use anime_get_media first to confirm the ID.',
+    'Walk the related-works graph from a media ID across multiple hops to find sequels, prequels, side stories, movies, OVAs, sources, and adaptations. Returns main entries followed by supplementary entries, in release-date order within each group. Use anime_get_media first to confirm the ID.',
   annotations: { readOnlyHint: true, idempotentHint: true },
 
   input: z.object({
@@ -124,16 +104,14 @@ export const animeGetRelations = tool('anime_get_relations', {
             watch_order_category: z
               .enum(['main', 'supplementary'])
               .describe(
-                '"main" for canonical story (prequels, source, sequels). ' +
-                  '"supplementary" for side stories, OVAs, specials, and spin-offs.',
+                'Group assigned from the discovery edge: "supplementary" for side stories, spin-offs, character links, compilations, summaries, contained works, alternatives, and other relations. The root and remaining entries are "main".',
               ),
             is_root: z.boolean().describe('True for the traversal root entry.'),
           })
-          .describe('A franchise entry in watch/read order.'),
+          .describe('A franchise entry with discovery path and presentation group.'),
       )
       .describe(
-        'All franchise entries in suggested watch/read order. ' +
-          'Main entries first, then supplementary. Within each group, ordered by relation type priority then season year.',
+        'Reached franchise entries, main group first and supplementary group second. Each group is sorted by release date, with missing date components after known ones for the same prefix.',
       ),
   }),
 
@@ -172,7 +150,7 @@ export const animeGetRelations = tool('anime_get_relations', {
     }
 
     type VisitedEntry = {
-      node: MediaNode;
+      node: MediaRelationEdge['node'];
       relationType: MediaRelationType | null;
       depth: number;
       parentId: number | null;
@@ -229,7 +207,7 @@ export const animeGetRelations = tool('anime_get_relations', {
       }
     }
 
-    // Presentation heuristic: main group first, then relation priority and year.
+    // Sort after traversal so equal dates retain BFS discovery order.
     const entries = Array.from(visited.values());
     ctx.enrich.total(visited.size);
     if (omittedAdultIds.size) {
@@ -242,12 +220,15 @@ export const animeGetRelations = tool('anime_get_relations', {
         Number(SUPPLEMENTARY_TYPES.has(a.relationType ?? '')) -
         Number(SUPPLEMENTARY_TYPES.has(b.relationType ?? ''));
       if (category !== 0) return category;
-      const aPriority = RELATION_ORDER[a.relationType ?? 'OTHER'] ?? 11;
-      const bPriority = RELATION_ORDER[b.relationType ?? 'OTHER'] ?? 11;
-      if (aPriority !== bPriority) return aPriority - bPriority;
-      const aYear = a.node.seasonYear ?? 9999;
-      const bYear = b.node.seasonYear ?? 9999;
-      return aYear - bYear;
+      const unknown = Number.MAX_SAFE_INTEGER;
+      const aDate = a.node.startDate;
+      const bDate = b.node.startDate;
+      return (
+        (aDate?.year ?? a.node.seasonYear ?? unknown) -
+          (bDate?.year ?? b.node.seasonYear ?? unknown) ||
+        (aDate?.month ?? unknown) - (bDate?.month ?? unknown) ||
+        (aDate?.day ?? unknown) - (bDate?.day ?? unknown)
+      );
     });
 
     return {
@@ -289,7 +270,7 @@ export const animeGetRelations = tool('anime_get_relations', {
   format: (result) => {
     const lines: string[] = [
       `## Franchise Relations (root: AL:${result.root_id})`,
-      'Relation-priority/year heuristic; not a topological chronology.',
+      'Release-date order within each group.',
       `${result.total_entries} entries · depth ${result.depth_reached}`,
       '',
     ];

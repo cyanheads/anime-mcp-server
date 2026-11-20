@@ -58,6 +58,7 @@ export const animeGetStudio = tool('anime_get_studio', {
       .describe(
         'Return only main studio credits. By default, includes main credits and co-credits.',
       ),
+    include_adult: z.boolean().default(false).describe('Include titles AniList marks as adult.'),
     sort: z
       .enum(['POPULARITY_DESC', 'SCORE_DESC', 'START_DATE_DESC', 'START_DATE'])
       .describe('AniList studio filmography sort field.')
@@ -85,14 +86,14 @@ export const animeGetStudio = tool('anime_get_studio', {
       .string()
       .optional()
       .describe(
-        'Set when the page is past the end of the filmography: says to request a lower page.',
+        'Reports adult titles omitted from this page or says to request a lower page when past the end.',
       ),
     totalCount: z
       .number()
       .int()
       .optional()
       .describe(
-        'Exact number of distinct titles, set only when the whole filmography fits on page 1 (0 for an empty first page). Use has_next_page to paginate.',
+        'Exact number of visible distinct titles, set only when the whole filmography fits on page 1. Use has_next_page to paginate.',
       ),
   },
 
@@ -112,7 +113,7 @@ export const animeGetStudio = tool('anime_get_studio', {
       .int()
       .nullable()
       .describe(
-        'Exact number of distinct titles, present only when the whole filmography fits on page 1 (0 for an empty first page). Null whenever the filmography spans more than one page.',
+        'Exact number of visible distinct titles when the whole filmography fits on page 1. Null whenever the filmography spans more than one page.',
       ),
     filmography: z
       .array(
@@ -208,14 +209,20 @@ export const animeGetStudio = tool('anime_get_studio', {
     }
 
     const { currentPage, hasNextPage } = studio.media.pageInfo;
-    const rows = distinctTitles(studio.media.edges);
+    const titles = distinctTitles(studio.media.edges);
+    const rows = input.include_adult ? titles : titles.filter(({ node }) => !node.isAdult);
+    const hidden = titles.length - rows.length;
 
     // AniList counts credits, not titles, and one title's credits can straddle a
     // page boundary, so only a filmography that fits entirely on page 1 has an
     // exact distinct-title count.
     const total = currentPage === 1 && !hasNextPage ? rows.length : null;
     if (total !== null) ctx.enrich.total(total);
-    if (rows.length === 0 && currentPage > 1) {
+    if (hidden > 0) {
+      ctx.enrich.notice(
+        `Omitted ${hidden} adult ${hidden === 1 ? 'title' : 'titles'} on this page. Set include_adult: true to include adult titles.`,
+      );
+    } else if (rows.length === 0 && currentPage > 1) {
       ctx.enrich.notice(pastEndNotice(currentPage, `${studio.name}'s filmography`));
     }
 
@@ -256,7 +263,6 @@ export const animeGetStudio = tool('anime_get_studio', {
 
     if (result.filmography.length === 0) {
       lines.push('No titles found.');
-      return [{ type: 'text', text: lines.join('\n') }];
     }
 
     for (const m of result.filmography) {

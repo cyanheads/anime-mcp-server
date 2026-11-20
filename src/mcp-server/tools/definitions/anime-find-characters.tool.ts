@@ -33,6 +33,7 @@ const aniListId = z.number().int().min(1).max(2147483647);
 async function personSuggestions(
   lookup: () => Promise<PersonSuggestions>,
   selectedId: number,
+  includeAdult: boolean,
   signal: AbortSignal,
 ) {
   let suggestions: PersonSuggestions;
@@ -54,13 +55,16 @@ async function personSuggestions(
     other_matches_has_next_page: hasNextPage,
     other_matches: matches
       .filter(({ id }) => id !== selectedId)
-      .map(({ id, name, popularMedia }) => ({
-        id,
-        name: name.full,
-        name_native: name.native,
-        media_id: popularMedia?.id ?? null,
-        media_title: popularMedia?.title.romaji ?? null,
-      })),
+      .map(({ id, name, popularMedia }) => {
+        const media = popularMedia?.isAdult && !includeAdult ? null : popularMedia;
+        return {
+          id,
+          name: name.full,
+          name_native: name.native,
+          media_id: media?.id ?? null,
+          media_title: media?.title.romaji ?? null,
+        };
+      }),
   };
 }
 
@@ -128,6 +132,7 @@ export const animeFindCharacters = tool('anime_find_characters', {
       .max(25)
       .default(10)
       .describe('Results per page. Defaults to 10; maximum 25.'),
+    include_adult: z.boolean().default(false).describe('Include titles AniList marks as adult.'),
   }),
 
   enrichment: {
@@ -150,7 +155,7 @@ export const animeFindCharacters = tool('anime_find_characters', {
     notice: z
       .string()
       .optional()
-      .describe('Next-page guidance. Present in by_media mode only when the cast list was capped.'),
+      .describe('Next-page guidance for a capped cast list or a count of omitted adult credits.'),
   },
 
   output: z.object({
@@ -232,6 +237,10 @@ export const animeFindCharacters = tool('anime_find_characters', {
               .nullable()
               .optional()
               .describe('Media format for this appearance. Present in by_character mode.'),
+            is_adult: z
+              .boolean()
+              .optional()
+              .describe('Whether the media appearance is marked adult.'),
             voice_actors: z
               .array(
                 z
@@ -279,6 +288,7 @@ export const animeFindCharacters = tool('anime_find_characters', {
                 media_id: z.number().int().describe('AniList media ID.'),
                 media_title: z.string().nullable().describe('Romanized media title.'),
                 media_format: z.string().nullable().describe('Media format.'),
+                is_adult: z.boolean().describe('Whether the media title is marked adult.'),
                 character_role: z.string().describe('Role: MAIN, SUPPORTING, or BACKGROUND.'),
                 character_name: z.string().nullable().describe('Character name in this role.'),
               })
@@ -291,6 +301,12 @@ export const animeFindCharacters = tool('anime_find_characters', {
   }),
 
   errors: [
+    {
+      reason: 'adult_content',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'The requested title is adult content and include_adult is false',
+      recovery: 'Retry the same ID with include_adult: true to include adult titles.',
+    },
     {
       reason: 'not_found',
       code: JsonRpcErrorCode.NotFound,
@@ -364,12 +380,15 @@ export const animeFindCharacters = tool('anime_find_characters', {
           ...ctx.recoveryFor('media_not_found'),
         });
       }
+      if (result.isAdult && !input.include_adult) {
+        throw ctx.fail('adult_content', 'The requested title is adult content.');
+      }
 
       if (result.hasNextPage) {
         ctx.enrich.truncated({
           shown: result.characters.length,
           cap: input.per_page,
-          guidance: `More characters are available. Call anime_find_characters with page ${input.page + 1} and the same id, per_page, and language (if set) to continue.`,
+          guidance: `More characters are available. Call anime_find_characters with page ${input.page + 1} and the same id, per_page, language, and include_adult values to continue.`,
         });
       }
 
@@ -423,13 +442,23 @@ export const animeFindCharacters = tool('anime_find_characters', {
         ? await personSuggestions(
             () => anilist.searchCharacterSuggestions(characterName, input.per_page, ctx.signal),
             character.id,
+            input.include_adult,
             ctx.signal,
           )
         : {};
 
       // Map each media appearance as a character entry so the agent can see
       // which titles the character appears in and their VAs per appearance.
-      const appearances = character.media.edges.map((edge) => {
+      const edges = input.include_adult
+        ? character.media.edges
+        : character.media.edges.filter(({ node }) => !node.isAdult);
+      const hidden = character.media.edges.length - edges.length;
+      if (hidden > 0) {
+        ctx.enrich.notice(
+          `Omitted ${hidden} adult media ${hidden === 1 ? 'appearance' : 'appearances'} on this page. Set include_adult: true to include adult titles.`,
+        );
+      }
+      const appearances = edges.map((edge) => {
         const media = edge.node;
         return {
           character_id: character.id,
@@ -441,6 +470,7 @@ export const animeFindCharacters = tool('anime_find_characters', {
           media_id: media.id,
           media_title: media.title.romaji,
           media_format: media.format ?? null,
+          is_adult: media.isAdult,
           voice_actor_data_available: edge.voiceActors !== null,
           voice_actors: (edge.voiceActors ?? []).map((va) => ({
             va_id: va.id,
@@ -510,9 +540,20 @@ export const animeFindCharacters = tool('anime_find_characters', {
       ? await personSuggestions(
           () => anilist.searchStaffSuggestions(vaName, input.per_page, ctx.signal),
           staff.id,
+          input.include_adult,
           ctx.signal,
         )
       : {};
+
+    const edges = input.include_adult
+      ? staff.characterMedia.edges
+      : staff.characterMedia.edges.filter(({ node }) => !node.isAdult);
+    const hidden = staff.characterMedia.edges.length - edges.length;
+    if (hidden > 0) {
+      ctx.enrich.notice(
+        `Omitted ${hidden} adult voice ${hidden === 1 ? 'role' : 'roles'} on this page. Set include_adult: true to include adult titles.`,
+      );
+    }
 
     return {
       full_text: input.full_text,
@@ -529,10 +570,11 @@ export const animeFindCharacters = tool('anime_find_characters', {
         description: staff.description ?? null,
         va_image_url: staff.image?.large ?? null,
         va_site_url: staff.siteUrl ?? null,
-        roles: staff.characterMedia.edges.map((edge) => ({
+        roles: edges.map((edge) => ({
           media_id: edge.node.id,
           media_title: edge.node.title.romaji,
           media_format: edge.node.format ?? null,
+          is_adult: edge.node.isAdult,
           character_role: edge.characterRole,
           character_name: edge.characters?.[0]?.name.full ?? null,
         })),
@@ -560,7 +602,7 @@ export const animeFindCharacters = tool('anime_find_characters', {
         );
         const mediaContext =
           c.media_id !== undefined || c.media_title !== undefined || c.media_format !== undefined
-            ? ` | media_id:${c.media_id ?? 'none'} media_title:${text(c.media_title ?? 'none')} media_format:${text(c.media_format ?? 'none')}`
+            ? ` | media_id:${c.media_id ?? 'none'} media_title:${text(c.media_title ?? 'none')} media_format:${text(c.media_format ?? 'none')}${c.is_adult === undefined ? '' : ` is_adult:${c.is_adult}`}`
             : '';
         lines.push(
           `**${text(c.character_name ?? 'Unknown')}** (${text(c.character_name_native ?? '?')}) [char_id:${c.character_id}] [${text(c.role)}]${mediaContext}`,
@@ -590,7 +632,7 @@ export const animeFindCharacters = tool('anime_find_characters', {
           `voice_actor_data_available: ${c.voice_actor_data_available}${c.voice_actor_data_available ? '' : ' (unavailable)'}`,
         );
         lines.push(
-          `  media_title:${text(c.media_title ?? 'Unknown title')} [AL:${c.media_id ?? '?'}] media_id:${c.media_id ?? 'none'} media_format:${text(c.media_format ?? 'none')} role:${text(c.role)} char_id:${c.character_id}`,
+          `  media_title:${text(c.media_title ?? 'Unknown title')} [AL:${c.media_id ?? '?'}] media_id:${c.media_id ?? 'none'} media_format:${text(c.media_format ?? 'none')} role:${text(c.role)} char_id:${c.character_id}${c.is_adult === undefined ? '' : ` is_adult:${c.is_adult}`}`,
         );
         for (const v of c.voice_actors) {
           lines.push(
@@ -611,7 +653,7 @@ export const animeFindCharacters = tool('anime_find_characters', {
         );
         for (const role of va.roles.slice(0, 20)) {
           lines.push(
-            `- character_name:${text(role.character_name ?? '?')} media_title:${text(role.media_title ?? 'Unknown')} character_role:${text(role.character_role)} media_format:${text(role.media_format ?? '?')} [AL:${role.media_id}] media_id:${role.media_id}`,
+            `- character_name:${text(role.character_name ?? '?')} media_title:${text(role.media_title ?? 'Unknown')} character_role:${text(role.character_role)} media_format:${text(role.media_format ?? '?')} [AL:${role.media_id}] media_id:${role.media_id} is_adult:${role.is_adult}`,
           );
         }
         if (omittedRoles > 0) lines.push(`${omittedRoles} roles omitted.`);
@@ -626,7 +668,7 @@ export const animeFindCharacters = tool('anime_find_characters', {
       );
       for (const role of va.roles) {
         lines.push(
-          `role: media_id:${role.media_id} media_title:${text(role.media_title ?? '?')} media_format:${text(role.media_format ?? '?')} character_role:${text(role.character_role)} character_name:${text(role.character_name ?? '?')}`,
+          `role: media_id:${role.media_id} media_title:${text(role.media_title ?? '?')} media_format:${text(role.media_format ?? '?')} character_role:${text(role.character_role)} character_name:${text(role.character_name ?? '?')} is_adult:${role.is_adult}`,
         );
       }
     }

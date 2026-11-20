@@ -110,7 +110,7 @@ function searchMyAnimeList(
 
 export const animeSearchMedia = tool('anime_search_media', {
   description:
-    'Search anime or manga by title, genre, tag, start year, country of origin, format, or status. Anime also supports broadcast-season filters. Needs at least one criterion — a sort other than SEARCH_MATCH alone browses the whole catalog. Returns ranked results with AniList IDs, titles, scores, format, and episode/chapter counts. When AniList has no match for a title-only query, falls back to MyAnimeList (via Jikan) and maps its rows to AniList IDs.',
+    'Search anime or manga by title, genre, tag, start year, country of origin, format, or status. Anime also supports broadcast-season filters. Needs at least one criterion — a sort other than SEARCH_MATCH alone browses the whole catalog. Returns ranked results with AniList IDs, titles, scores, format, and episode/chapter counts. When AniList has no match for a title-only query, finds candidates on MyAnimeList (via Jikan) and returns their resolved AniList metadata.',
   annotations: { readOnlyHint: true, openWorldHint: true },
 
   input: z.object({
@@ -207,7 +207,7 @@ export const animeSearchMedia = tool('anime_search_media', {
       .string()
       .optional()
       .describe(
-        'Set when results is empty: echoes the applied criteria and how to broaden them, says when the page is past the end of the results, and says when the MyAnimeList fallback was skipped or could not be checked. Also set on the last page AniList serves (its 5,000-entry reach) while has_next_page is still true.',
+        'Explains empty results, a page past the end, a skipped or unavailable MyAnimeList fallback, or the last page AniList serves when has_next_page remains true. On a MyAnimeList fallback page, counts rows omitted because they have no eligible AniList match.',
       ),
     totalCount: z
       .number()
@@ -247,7 +247,7 @@ export const animeSearchMedia = tool('anime_search_media', {
     source: z
       .enum(['anilist', 'jikan'])
       .describe(
-        'Which API provided these results: "anilist" (primary) or "jikan" (MyAnimeList fallback for a title-only query AniList has no match for).',
+        'Which API supplied the matching candidates: "anilist" (primary) or "jikan" (MyAnimeList fallback). Row metadata comes from AniList in both cases.',
       ),
     page: z.number().int().describe('Current page number.'),
     has_next_page: z
@@ -453,28 +453,16 @@ export const animeSearchMedia = tool('anime_search_media', {
     const { found, resolvedByMalId } = fallback.value;
     const results = found.results.flatMap((result) => {
       const resolved = resolvedByMalId.get(result.mal_id);
-      if (!resolved) return [];
-      return [
-        {
-          id: resolved.id,
-          id_mal: result.mal_id,
-          title_romaji: result.title,
-          title_english: result.title_english,
-          title_native: null,
-          type: input.media_type,
-          country_of_origin: resolved.countryOfOrigin ?? null,
-          format: result.type ?? null,
-          status: result.status ?? null,
-          season: null,
-          episodes: result.episodes ?? null,
-          chapters: result.chapters ?? null,
-          mean_score: result.score ? Math.round(result.score * 10) : null,
-          is_adult: resolved.isAdult,
-          cover_image_url: null,
-        },
-      ];
+      return resolved ? [toResult(resolved)] : [];
     });
-    if (results.length === 0) ctx.enrich.notice(noResults);
+    const omitted = found.results.length - results.length;
+    if (omitted > 0) {
+      ctx.enrich.notice(
+        `Omitted ${omitted} MyAnimeList ${omitted === 1 ? 'row' : 'rows'} with no eligible AniList match.`,
+      );
+    } else if (results.length === 0) {
+      ctx.enrich.notice(noResults);
+    }
 
     return {
       source: 'jikan' as const,
@@ -486,16 +474,13 @@ export const animeSearchMedia = tool('anime_search_media', {
   },
 
   format: (result) => {
-    if (result.results.length === 0) {
-      return [
-        { type: 'text', text: `No results found (source: ${result.source}, page ${result.page}).` },
-      ];
-    }
-
-    const lines: string[] = [
-      `**Search Results** (source: ${result.source}, page ${result.page}${result.total_results !== null ? `, ${result.total_results} total` : ''})`,
-      '',
-    ];
+    const lines =
+      result.results.length === 0
+        ? [`No results found (source: ${result.source}, page ${result.page}).`]
+        : [
+            `**Search Results** (source: ${result.source}, page ${result.page}${result.total_results !== null ? `, ${result.total_results} total` : ''})`,
+            '',
+          ];
 
     for (const r of result.results) {
       const title = r.title_english ?? r.title_romaji ?? r.title_native ?? 'Unknown';
@@ -532,7 +517,8 @@ export const animeSearchMedia = tool('anime_search_media', {
 
     const nextReachable =
       result.source === 'anilist'
-        ? nextPageReachable({
+        ? result.results.length > 0 &&
+          nextPageReachable({
             page: result.page,
             hasNextPage: result.has_next_page,
             rowsOnPage: result.results.length,

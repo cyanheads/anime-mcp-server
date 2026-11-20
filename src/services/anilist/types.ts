@@ -108,7 +108,8 @@ export interface ExternalLink {
 
 /** A relation edge pointing to another media entry. */
 export interface MediaRelationEdge {
-  node: MediaNode;
+  /** The standalone relation query selects the start date for release ordering. */
+  node: MediaNode & { startDate?: MediaDetail['startDate'] };
   relationType: MediaRelationType;
 }
 
@@ -244,7 +245,7 @@ export interface CharacterWithMedia {
 export interface PersonSuggestion {
   id: number;
   name: CharacterWithMedia['name'];
-  popularMedia: Pick<MediaNode, 'id' | 'title'> | null;
+  popularMedia: Pick<MediaNode, 'id' | 'title' | 'isAdult'> | null;
 }
 
 /** The first name match page, independent of the selected person's role page. */

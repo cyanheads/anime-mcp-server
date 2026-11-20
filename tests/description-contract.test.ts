@@ -82,7 +82,12 @@ mcpTest(
             characterMedia: {
               pageInfo: { hasNextPage: true },
               edges: Array.from({ length: 25 }, (_, id) => ({
-                node: { id: id + 1, title: { romaji: `Title ${id}` }, format: null },
+                node: {
+                  id: id + 1,
+                  title: { romaji: `Title ${id}` },
+                  format: null,
+                  isAdult: false,
+                },
                 characterRole: 'MAIN',
                 characters: [{ name: { full: `Character ${id}` } }],
               })),
@@ -110,6 +115,7 @@ mcpTest(
             media_id: 25,
             media_title: 'Title 24',
             media_format: null,
+            is_adult: false,
             character_role: 'MAIN',
             character_name: 'Character 24',
           },

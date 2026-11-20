@@ -89,6 +89,36 @@ describe('animeGetStudio', () => {
     );
   });
 
+  it('counts hidden distinct titles and preserves continuation for a filtered page', async () => {
+    const credit = mockStudioDetail.media.edges[0]!;
+    const adultCredit = { ...credit, node: { ...credit.node, isAdult: true } };
+    vi.mocked(anilist.getStudioById).mockResolvedValue({
+      ...mockStudioDetail,
+      media: {
+        pageInfo: { currentPage: 2, perPage: 2, hasNextPage: true },
+        edges: [adultCredit, { ...adultCredit, isMainStudio: false }],
+      },
+    });
+    const filtered = await runToolContract(animeGetStudio, { id: 21, page: 2, per_page: 2 });
+    expect(filtered.structuredContent).toMatchObject({
+      filmography: [],
+      has_next_page: true,
+      total_titles: null,
+      notice: expect.stringContaining('1'),
+    });
+    expect(JSON.stringify(filtered.content)).not.toContain('Steins;Gate');
+    const included = await runToolContract(animeGetStudio, {
+      id: 21,
+      page: 2,
+      per_page: 2,
+      include_adult: true,
+    });
+    expect(included.structuredContent).toMatchObject({
+      filmography: [{ id: 11757, is_adult: true }],
+    });
+    expectLiteralProse(included.content, 'Steins;Gate');
+  });
+
   it('returns studio filmography by name', async () => {
     vi.mocked(anilist.searchStudio).mockResolvedValue(mockStudioDetail);
     const ctx = createMockContext({ errors: animeGetStudio.errors });

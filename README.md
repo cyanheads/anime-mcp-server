@@ -31,8 +31,8 @@ Anime and manga data from AniList, Jikan (MyAnimeList), and Kitsu. Search titles
 |:---|:---|
 | `anime_search_media` | Search anime or manga by title, genre, tag, release year, country, format, or status; anime also supports broadcast seasons. AniList primary; Jikan (MAL) fallback when AniList has no match for a title-only query. |
 | `anime_get_media` | Full detail for one anime or manga by AniList ID — synopsis, format, episode/chapter count, status, season, studios, source material, genres and tags (spoiler-flagged), AniList and MAL scores side by side, streaming links, cover/banner, and direct relations. |
-| `anime_get_relations` | Walks the related-works graph within a hop limit. Groups main and supplementary entries by relation priority, then year; not a strict chronology. |
-| `anime_get_schedule` | Airing schedule for a season or upcoming episode window. Season mode lists all anime airing in a given season/year. Upcoming mode returns the next episode for each airing title within a date window, with UTC timestamp and countdown. |
+| `anime_get_relations` | Walks the related-works graph within a hop limit. Lists main entries first, then supplementary entries, each group in release-date order. |
+| `anime_get_schedule` | Airing schedule for a season or upcoming episode window. Season mode lists titles that premiered in the requested season. Upcoming mode returns scheduled episodes within a date window, with UTC timestamp and countdown. |
 | `anime_find_characters` | Characters and voice actors for a title, or look up a character/VA by name or exact AniList person ID. Name lookups include other matching people; results link to their media appearances. |
 | `anime_get_recommendations` | Page AniList recommendations with matching MAL votes, or Jikan candidates resolved through AniList. Reports the selected source and Jikan availability; optionally echoes what you liked. |
 | `anime_get_rankings` | Top, trending, or seasonal rankings. Filterable by genre, tag, and format. Top returns all-time by score; trending uses AniList's trending order; seasonal returns the current or specified season sorted by popularity. |
@@ -56,14 +56,14 @@ Media resource data is also reachable via tools. Use `anime_search_media` to dis
 - Search anime or manga by title, genre, tag, `start_year`, `country_of_origin` (ISO alpha-2, such as `JP` or `KR`), format, status, or up to 5 sort values; at least one criterion is required. `season`/`season_year` apply only to anime (`anime_only_season` otherwise). `page`/`per_page` pages results (max 50), and `include_adult: true` opts into adult titles
 - Results carry AniList IDs, titles, scores, and episode/chapter counts. AniList is primary; title-only searches with no match can fall back to Jikan at `per_page` 25 or less. Follow `has_next_page`; AniList `total_results` is exact on a nonempty final page or zero on an empty first page, and null otherwise. Jikan totals remain null
 - AniList serves only the first 5,000 search, season, and ranking entries; deeper pages fail with `page_depth_exceeded`, so narrow the criteria instead
-- `effectiveQuery` echoes normalized criteria on both surfaces. Empty first-page genre searches can suggest the corresponding AniList tag. Year and country filters remain on AniList and suppress the title-only fallback
+- `effectiveQuery` echoes normalized criteria on both surfaces. Empty first-page genre searches can suggest the corresponding AniList tag. Year and country filters remain on AniList and suppress the title-only fallback. In a fallback, Jikan supplies candidate order and pagination. AniList supplies every result field. A notice counts candidates without an eligible AniList match
 
 ---
 
 ### `anime_get_media` <sub>tool</sub>
 
 - Fetch full detail by AniList `id`, with adult content requiring `include_adult: true`; discover IDs through `anime_search_media`
-- Returns synopsis, genres, spoiler-flagged tags, studios, direct relations, images, separate AniList/MAL scores, release dates at their known precision, episode duration, origin, alternate titles, and supported trailer links. Streaming destinations merge Kitsu and enabled AniList links; Kitsu retains its language detail on duplicate hosts
+- Returns synopsis, genres, spoiler-flagged tags, studios, direct relations, images, separate AniList/MAL scores, release dates at their known precision, episode duration, origin, alternate titles, and supported trailer links. Anime viewing links merge by host, preserving Kitsu language details. Manga reading links retain each distinct AniList language on the same host
 - `data_sources` identifies successful supplements; a notice names unavailable supplements. Each optional supplement has one five-second budget. `not_found` means the ID did not resolve; `adult_content` means it exists but requires opt-in. Adult direct relations are omitted without opt-in, with a count
 - `full_text: true` returns the complete result as fenced JSON; by default the synopsis is a 500-character preview and tags and relations are shortened, with counts of what was omitted
 
@@ -72,14 +72,14 @@ Media resource data is also reachable via tools. Use `anime_search_media` to dis
 ### `anime_get_relations` <sub>tool</sub>
 
 - Walk a franchise from an AniList `id` up to `max_depth` hops (default 2, max 4). Adult roots require `include_adult: true`; without opt-in, adult relations are omitted and not traversed
-- Returns `main` and `supplementary` entries with country of origin, season year and episode/chapter counts, ordered by relation priority then year. `not_found` means the root ID did not resolve; `adult_content` identifies an adult root without opt-in
+- Returns `main` and `supplementary` entries with country of origin, season year and episode/chapter counts, ordered by release date within each group. `not_found` means the root ID did not resolve; `adult_content` identifies an adult root without opt-in
 - `depth`, `parent_id`, `relation_to_parent`, and `path` show the shortest route to each entry. `relation_to_root` is set only for entries linked directly to the root, and is null otherwise. Entries at the hop limit are returned without their own relations; `depth_reached` is the deepest hop returned
 
 ---
 
 ### `anime_get_schedule` <sub>tool</sub>
 
-- `season` mode requires `season` and `season_year`; `upcoming` uses `days_ahead` (default 7, max 30). Page with `page`/`per_page` (max 50); adult titles require `include_adult: true`
+- To find episodes of continuing series, use `upcoming`. The premiere catalog in `season` mode requires `season` and `season_year`; `upcoming` uses `days_ahead` (default 7, max 30). Page with `page`/`per_page` (max 50); adult titles require `include_adult: true`
 - Returns UTC ISO 8601 airing times and `time_until_airing_seconds`. Upcoming text includes total episodes when known and uses minutes below one hour. Follow `has_next_page`; `total_results` is exact only on the final season page. `invalid_season` and `conflicting_inputs` identify invalid mode inputs
 
 ---
@@ -87,7 +87,7 @@ Media resource data is also reachable via tools. Use `anime_search_media` to dis
 ### `anime_find_characters` <sub>tool</sub>
 
 - Supply exactly one of media `id`, `character_name`, `character_id`, `voice_actor_name`, or `voice_actor_id`. `language` filters only media cast lookups; use `JAPANESE` for Japanese credits only. `per_page` defaults to 10 and is capped at 25; omitted language retains every returned dub language
-- Returns cast, voice actors, or media appearances according to `mode`. Name lookups retain the selected hit and offer `other_matches` from the first suggestion page, with independent continuation and availability. Exact person IDs select a known character or staff member directly. `truncated: true` carries next-page guidance for capped cast lists; `media_not_found`/`not_found` distinguish an unknown media ID from an unmatched person
+- Adult cast roots require `include_adult: true`. The same opt-in reveals adult appearances and voice roles. Name lookups retain the selected hit and offer `other_matches` from the first suggestion page, with independent continuation and availability. Exact person IDs select a known character or staff member directly. `truncated: true` carries next-page guidance for capped cast lists; `media_not_found`/`not_found` distinguish an unknown media ID from an unmatched person
 - `voice_actor_data_available: false` means the provider had no voice actor data, as opposed to an empty list. `full_text: true` returns every role on the page and the full biography as fenced JSON; by default biographies are 500-character previews and staff roles stop at 20, with counts of what was omitted
 
 ---
@@ -110,7 +110,7 @@ Media resource data is also reachable via tools. Use `anime_search_media` to dis
 ### `anime_get_studio` <sub>tool</sub>
 
 - Identify a studio with exactly one of `name` or `id`; IDs come from `anime_get_media.studios[].id` or a studio lookup's `studio_id`. Sort by popularity, score, or release date and page with `page`/`per_page` (max 25). Set `main_only: true` to filter to main-studio credits before paging
-- Returns one row per distinct title within the page, with `is_main_studio` identifying main credits. Follow `has_next_page`; `total_titles` is exact only when the whole filmography fits on page 1. `not_found` means the studio did not resolve
+- Adult studio credits require `include_adult: true`. Returns one row per distinct visible title within the page, with `is_main_studio` identifying main credits. Follow `has_next_page`; `total_titles` is exact only when the whole filmography fits on page 1. `not_found` means the studio did not resolve
 
 ---
 
@@ -119,7 +119,7 @@ Media resource data is also reachable via tools. Use `anime_search_media` to dis
 - Read a compact `application/json` media record using an AniList `id` from `anime_search_media` or `anime_get_media`
 - The ID must be a whole number from 1 to 2147483647; anything else fails with `invalid_id` before any upstream call
 - Returns title variants, synopsis, scores, genres, streaming count, and cover image; use `anime_get_media` for tags, studios, streaming links, and relations
-- Adult IDs return `adult_content`; use `anime_get_media` with `include_adult: true` for adult detail. `streaming_count` counts the same merged destinations as the media tool
+- Adult IDs return `adult_content`; use `anime_get_media` with `include_adult: true` for adult detail. `streaming_count` counts the same viewing or reading links as the media tool. `data_sources` identifies retrieved records. A `notice` names failed supplement requests
 
 ---
 
@@ -131,7 +131,7 @@ Anime/manga-specific:
 
 - Three-source architecture: AniList GraphQL (primary), Jikan v4 REST (MAL scores + recommendations), Kitsu JSON:API (streaming links with sub/dub language detail)
 - ID reconciliation via AniList's `idMal` bridge — no cross-source ID guessing
-- Franchise relation graph traversal with heuristic ordering by relation-type priority, then season year
+- Franchise relation graph traversal with release-date ordering within the main and supplementary groups
 - Rate-limit-aware service layer: AniList 30 req/30s with automatic backoff; Jikan 350ms floor between calls
 - Keyless by design — all three sources are public and require no API credentials
 

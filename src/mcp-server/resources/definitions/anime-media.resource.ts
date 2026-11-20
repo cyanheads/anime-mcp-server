@@ -13,7 +13,7 @@ import { mergeStreamingLinks } from '@/services/streaming-links.js';
 export const animeMediaResource = resource('anime://media/{id}', {
   name: 'anime-media',
   description:
-    'Compact record for a non-adult anime or manga by AniList ID: titles, full normalized synopsis, format, status, season, episode/chapter counts, genres, AniList/MAL scores, streaming count, cover and site URLs. Use anime_get_media for tags, studios, streaming links, or adult titles with include_adult: true.',
+    'Compact record for a non-adult anime or manga by AniList ID: titles, full normalized synopsis, format, status, season, episode/chapter counts, genres, AniList/MAL scores, viewing or reading link count, cover and site URLs, source flags, and a notice for failed supplements. Use anime_get_media for tags, studios, viewing or reading links, or adult titles with include_adult: true.',
   mimeType: 'application/json',
   params: z.object({
     id: z
@@ -61,9 +61,20 @@ export const animeMediaResource = resource('anime://media/{id}', {
     genres: z.array(z.string().describe('A genre label.')).describe('Genre list.'),
     mean_score: z.number().nullable().describe('AniList mean score 0–100, or null.'),
     mal_score: z.number().nullable().describe('MAL score 0–10.0, or null.'),
-    streaming_count: z.number().int().describe('Number of streaming platforms found.'),
+    streaming_count: z
+      .number()
+      .int()
+      .describe('Number of viewing or reading links returned by anime_get_media for this title.'),
     cover_image_url: z.string().nullable().describe('Cover image URL, or null.'),
     site_url: z.string().nullable().describe('AniList page URL.'),
+    data_sources: z
+      .object({
+        anilist: z.boolean().describe('True when AniList data was successfully retrieved.'),
+        mal: z.boolean().describe('True when a MAL record was retrieved through Jikan.'),
+        kitsu: z.boolean().describe('True when a Kitsu record was retrieved.'),
+      })
+      .describe('Source flags. A false flag means no record was retrieved from that source.'),
+    notice: z.string().optional().describe('Names any failed supplement requests.'),
   }),
 
   async handler(params, ctx) {
@@ -98,12 +109,15 @@ export const animeMediaResource = resource('anime://media/{id}', {
     const jikanData = jikanResult.status === 'fulfilled' ? jikanResult.value : null;
     const kitsuData = kitsuResult.status === 'fulfilled' ? kitsuResult.value : null;
 
-    if (jikanResult.status === 'rejected') ctx.log.warning('Jikan MAL data is unavailable.');
-    if (kitsuResult.status === 'rejected') ctx.log.warning('Kitsu streaming data is unavailable.');
-    const streamingCount =
-      detail.type === 'ANIME'
-        ? mergeStreamingLinks(kitsuData?.streamingLinks ?? [], detail.externalLinks ?? []).length
-        : 0;
+    const notices: string[] = [];
+    if (jikanResult.status === 'rejected') notices.push('Jikan MAL data is unavailable.');
+    if (kitsuResult.status === 'rejected') notices.push('Kitsu streaming data is unavailable.');
+    for (const notice of notices) ctx.log.warning(notice);
+    const streamingCount = mergeStreamingLinks(
+      detail.type,
+      kitsuData?.streamingLinks ?? [],
+      detail.externalLinks ?? [],
+    ).length;
 
     const season =
       detail.season && detail.seasonYear
@@ -131,6 +145,12 @@ export const animeMediaResource = resource('anime://media/{id}', {
       streaming_count: streamingCount,
       cover_image_url: detail.coverImage?.extraLarge ?? null,
       site_url: detail.siteUrl ?? null,
+      data_sources: {
+        anilist: true,
+        mal: jikanData !== null,
+        kitsu: kitsuData !== null,
+      },
+      ...(notices.length ? { notice: notices.join(' ') } : {}),
     };
   },
 });

@@ -615,7 +615,7 @@ describe('anime_search_media over the wire', () => {
    * AniList fake that answers the search with an empty page and the MAL-ID lookup
    * with one adult and one general title, filtering on `isAdult` the way AniList does.
    */
-  function routeAdultFallback() {
+  function routeAdultFallback(resolve = true) {
     const jikanRow = (malId: number) => ({
       mal_id: malId,
       title: `MAL ${malId}`,
@@ -646,19 +646,19 @@ describe('anime_search_media over the wire', () => {
             { ...mediaNode(501), idMal: 501, isAdult: false, countryOfOrigin: 'KR' },
             { ...mediaNode(502), idMal: 502, isAdult: true, countryOfOrigin: null },
           ].filter((node) => variables.isAdult !== false || !node.isAdult);
-          return Response.json({ data: { Page: { media } } });
+          return Response.json({ data: { Page: { media: resolve ? media : [] } } });
         },
       },
       {
         method: 'GET',
         match: JIKAN,
         respond: Response.json({
-          data: [jikanRow(501), jikanRow(502)],
+          data: [jikanRow(502), jikanRow(501)],
           pagination: {
             current_page: 1,
-            has_next_page: false,
-            last_visible_page: 1,
-            items: { count: 2, total: 2, per_page: 20 },
+            has_next_page: true,
+            last_visible_page: 2,
+            items: { count: 2, total: 3, per_page: 20 },
           },
         }),
       },
@@ -683,12 +683,31 @@ describe('anime_search_media over the wire', () => {
     expect(new URL(jikanCalls()[0]!.request.url).searchParams.get('sfw')).toBe('true');
     const lookup = anilistCalls()[1]!.request;
     await expect(variablesOf(lookup)).resolves.toMatchObject({
-      idMalIn: [501, 502],
+      idMalIn: [502, 501],
       isAdult: false,
     });
+
+    expect(result.structuredContent).toMatchObject({
+      notice: 'Omitted 1 MyAnimeList row with no eligible AniList match.',
+      results: [
+        {
+          title_romaji: 'Title 501',
+          format: 'TV',
+          status: 'FINISHED',
+          season: 'FALL 2011',
+          episodes: 24,
+          mean_score: 90,
+        },
+      ],
+    });
+    expect(contentText(result)).toContain('Title 501');
+    expect(contentText(result)).toContain('TV · FINISHED · Score: 90/100 · 24 eps · FALL 2011');
+    expect(contentText(result)).toContain(
+      'Omitted 1 MyAnimeList row with no eligible AniList match.',
+    );
   });
 
-  it('returns adult fallback titles when include_adult is true', async () => {
+  it('returns adult fallback titles in Jikan order with Jikan pagination', async () => {
     routeAdultFallback();
 
     const result = await runToolContract(animeSearchMedia, {
@@ -699,14 +718,35 @@ describe('anime_search_media over the wire', () => {
 
     expect(result.structuredContent).toMatchObject({
       source: 'jikan',
+      page: 1,
+      has_next_page: true,
+      total_results: null,
       results: [
-        { id: 501, is_adult: false, country_of_origin: 'KR' },
         { id: 502, is_adult: true, country_of_origin: null },
+        { id: 501, is_adult: false, country_of_origin: 'KR' },
       ],
     });
     expect(contentText(result)).toContain('country_of_origin: KR');
     expect(contentText(result)).toContain('country_of_origin: N/A');
     expect(new URL(jikanCalls()[0]!.request.url).searchParams.has('sfw')).toBe(false);
+  });
+
+  it('advertises the next page when no Jikan row on this page resolves', async () => {
+    routeAdultFallback(false);
+
+    const result = await runToolContract(animeSearchMedia, {
+      media_type: 'ANIME',
+      query: 'Unmatched on AniList',
+    });
+
+    expect(result.structuredContent).toMatchObject({
+      source: 'jikan',
+      page: 1,
+      has_next_page: true,
+      results: [],
+      notice: 'Omitted 2 MyAnimeList rows with no eligible AniList match.',
+    });
+    expect(contentText(result)).toContain('_More results available (page 2)._');
   });
 
   it('makes no Jikan request above per_page 25', async () => {

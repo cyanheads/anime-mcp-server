@@ -85,6 +85,34 @@ describe('animeGetSchedule', () => {
     vi.resetAllMocks();
   });
 
+  it('explains premiere-season coverage on both response surfaces', async () => {
+    vi.mocked(anilist.getSeasonSchedule).mockResolvedValue(mockSeasonPage);
+    const result = await runToolContract(animeGetSchedule, {
+      mode: 'season',
+      season: 'FALL',
+      season_year: 2024,
+    });
+    expect(result.structuredContent).toMatchObject({
+      notice: expect.stringContaining('continuing'),
+    });
+    expect(JSON.stringify(result.content)).toContain('continuing');
+  });
+
+  it('counts adult episodes omitted from a mixed upcoming page', async () => {
+    vi.mocked(anilist.getUpcomingEpisodes).mockResolvedValue({
+      airingSchedules: [...mockAiringSchedules, adultSchedule],
+      hasNextPage: true,
+    });
+    const result = await runToolContract(animeGetSchedule, { mode: 'upcoming' });
+    expect(result.structuredContent).toMatchObject({
+      entries: [{ id: mockMediaNode.id }],
+      has_next_page: true,
+      notice: expect.stringContaining('1'),
+    });
+    expect(JSON.stringify(result.content)).toContain('adult');
+    expect(JSON.stringify(result.content)).not.toContain('Adult Example');
+  });
+
   it.each(['season', 'upcoming'] as const)(
     'escapes provider titles only in %s summaries',
     async (mode) => {
@@ -601,7 +629,7 @@ describe('animeGetSchedule inputs and contracts', () => {
 
         expect(result.structuredContent).toMatchObject({
           has_next_page: true,
-          notice: PAGE_DEPTH_EDGE_NOTICE,
+          notice: expect.stringContaining(PAGE_DEPTH_EDGE_NOTICE),
         });
         const text = contentText(result);
         expect(text).toContain(PAGE_DEPTH_EDGE_NOTICE);
@@ -609,7 +637,7 @@ describe('animeGetSchedule inputs and contracts', () => {
       },
     );
 
-    it('season page 99 at 50 per page keeps the next-page hint and no notice', async () => {
+    it('season page 99 at 50 per page keeps the next-page hint and coverage notice', async () => {
       vi.mocked(anilist.getSeasonSchedule).mockResolvedValue(
         seasonPage(seasonNodes(50), { currentPage: 99, hasNextPage: true, perPage: 50 }),
       );
@@ -622,7 +650,9 @@ describe('animeGetSchedule inputs and contracts', () => {
         per_page: 50,
       });
 
-      expect(result.structuredContent).not.toHaveProperty('notice');
+      expect(result.structuredContent).toMatchObject({
+        notice: expect.stringContaining('continuing'),
+      });
       expect(contentText(result)).toContain('More results available (page 100)');
     });
   });

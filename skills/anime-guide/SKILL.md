@@ -4,7 +4,7 @@ description: Use anime_* tools to trace a franchise, follow cast into other role
 license: Apache-2.0
 metadata:
   author: "cyanheads"
-  version: "1.1"
+  version: "1.2"
 ---
 
 ## Scope
@@ -21,11 +21,11 @@ For cast-to-career research, carry `characters[].character_id` into `character_i
 
 - Confirm the title, media type, and format before following an adaptation, sequel, or recommendation. Similar names can refer to different works.
 - Before declaring a title absent, inspect the search notice and coverage. A filtered search does not run the MAL fallback; a title-only fallback can be skipped or unavailable. Try alternate title forms and broader criteria before concluding the catalog has no match.
-- Before calling a franchise list complete or presenting a definitive watch order, check traversal depth, discovered paths, and adult-omission notices. Boundary works and omitted adult branches have not had their relations explored; the displayed order is not narrative chronology.
+- Before calling a franchise list complete or presenting a definitive watch order, check traversal depth, discovered paths, and adult-omission notices. Boundary works and omitted adult branches have not had their relations explored; release dates order each group. Use the paths to explain how works connect.
 - Before saying a character has no actor in a language, check actor-data availability and remaining cast pages. Missing provider data is not a confirmed empty cast.
 - Before counting a studio's titles, finish the filmography pages and deduplicate by media ID across pages, including with `main_only: true`. Credits can repeat a title across page boundaries; retain the distinction between main studio and co-credit.
-- Before claiming that a title is currently watchable in a country, verify the platform directly. Catalog streaming links are supplementary leads and can be stale.
-- Before stopping on an empty upcoming-schedule or Jikan recommendation page, check continuation. Filtering or unresolved candidates can leave an empty page while later candidates remain.
+- Check the publisher or platform before claiming current regional availability. Manga reading links distinguish languages on the same host.
+- Before stopping on an empty studio, appearance, voice-role, upcoming-schedule, or Jikan recommendation page, check continuation. Filtering or unresolved candidates can leave an empty page while later candidates remain.
 - Before concluding that MAL has no recommendations, check Jikan status. Unavailable data and a missing MAL mapping do not establish an empty recommendation list.
 
 ## Workflows
@@ -38,4 +38,4 @@ For cast-to-career research, carry `characters[].character_id` into `character_i
 
 **Explore a studio.** Resolve the studio from a title credit or studio-name lookup. Use `main_only: true` when the question concerns primary animation credits, then retain the studio ID and filter while paging. Deduplicate titles before comparing output. A co-credit alone does not establish primary production responsibility.
 
-**Choose what to watch this season.** Use rankings for discovery and schedules for broadcast timing, then inspect shortlisted titles. Convert returned UTC timestamps to the user's timezone and label broadcast timing separately from streaming availability.
+**Choose what to watch this season.** Use the season catalog for premieres and the upcoming episode window for continuing shows. Inspect shortlisted titles before recommending them. Convert returned UTC timestamps to the user's timezone and label broadcast timing separately from streaming availability.

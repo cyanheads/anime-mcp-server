@@ -207,6 +207,7 @@ mcpTest('getMediaCharacters preserves a valid empty cast page', async ({ fetchMo
     respond: Response.json({
       data: {
         Media: {
+          isAdult: true,
           characters: { pageInfo: { hasNextPage: false }, edges: [] },
         },
       },
@@ -214,9 +215,13 @@ mcpTest('getMediaCharacters preserves a valid empty cast page', async ({ fetchMo
   });
 
   await expect(getMediaCharacters({ mediaId: 1, page: 4, perPage: 2 })).resolves.toEqual({
+    isAdult: true,
     characters: [],
     hasNextPage: false,
   });
+  expect(await requestQuery(fetchMock.calls[0]!.request)).toMatch(
+    /Media\(id: \$id\)\s*\{\s*isAdult/,
+  );
 });
 
 mcpTest(

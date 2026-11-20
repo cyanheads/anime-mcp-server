@@ -20,7 +20,7 @@ import { formatAiringCountdown, fullTextJson, headingText } from '../render-text
 
 export const animeGetMedia = tool('anime_get_media', {
   description:
-    'Full detail for one anime or manga by AniList ID. Returns synopsis, alternate titles, release dates, episode duration, country of origin, trailer, studios, tags, AniList and MAL scores, streaming links, and direct relations. Adult roots and adult relations require include_adult: true. Use anime_search_media first to find the AniList ID.',
+    'Full detail for one anime or manga by AniList ID. Returns synopsis, alternate titles, release dates, episode duration, country of origin, trailer, studios, tags, AniList and MAL scores, viewing or reading links, and direct relations. Adult roots and adult relations require include_adult: true. Use anime_search_media first to find the AniList ID.',
   annotations: { readOnlyHint: true, idempotentHint: true },
 
   input: z.object({
@@ -154,7 +154,8 @@ export const animeGetMedia = tool('anime_get_media', {
         z
           .object({
             site: z.string().describe('Platform name, e.g. "Crunchyroll", "Netflix".'),
-            url: z.string().describe('Link to the streaming page.'),
+            url: z.string().describe('Link to the viewing or reading page.'),
+            language: z.string().nullable().describe('Language reported by AniList, or null.'),
             subs: z
               .array(z.string().describe('A language code or name.'))
               .describe('Subtitle languages available on this platform.'),
@@ -163,11 +164,9 @@ export const animeGetMedia = tool('anime_get_media', {
               .describe('Dub languages available on this platform.'),
             source: z.enum(['kitsu', 'anilist']).describe('Which service provided this link.'),
           })
-          .describe('A streaming platform link entry.'),
+          .describe('A viewing or reading link.'),
       )
-      .describe(
-        'Streaming platform links (anime only). Empty for manga or when no streaming data is available.',
-      ),
+      .describe('Anime viewing or manga reading links. Empty when no usable links are available.'),
     relations: z
       .array(
         z
@@ -186,7 +185,7 @@ export const animeGetMedia = tool('anime_get_media', {
           .describe('A relation entry.'),
       )
       .describe(
-        'Direct relations. Use anime_get_relations for a depth-bounded relation graph with heuristic ordering.',
+        'Direct relations. Use anime_get_relations for a depth-bounded graph ordered by release date within each group.',
       ),
     cover_image_url: z.string().nullable().describe('Cover image URL (extra large), or null.'),
     banner_image_url: z.string().nullable().describe('Banner image URL, or null.'),
@@ -261,10 +260,11 @@ export const animeGetMedia = tool('anime_get_media', {
     const notices: string[] = [];
     if (jikanResult.status === 'rejected') notices.push('Jikan MAL data is unavailable.');
     if (kitsuResult.status === 'rejected') notices.push('Kitsu streaming data is unavailable.');
-    const streamingLinks =
-      mediaType === 'ANIME'
-        ? mergeStreamingLinks(kitsuData?.streamingLinks ?? [], detail.externalLinks ?? [])
-        : [];
+    const streamingLinks = mergeStreamingLinks(
+      mediaType,
+      kitsuData?.streamingLinks ?? [],
+      detail.externalLinks ?? [],
+    );
     const relations = detail.relations?.edges ?? [];
     const visibleRelations = input.include_adult
       ? relations
@@ -415,11 +415,11 @@ export const animeGetMedia = tool('anime_get_media', {
       if (mainStudios.length) lines.push(`**Studio(s):** ${mainStudios.join(', ')}`);
     }
 
-    // Streaming links
+    // Viewing or reading links
     if (result.streaming_links.length) {
       lines.push(
         '',
-        `**Streaming:** ${result.streaming_links.map((s) => markdownLink(s.site, s.url)).join(', ')}`,
+        `**${result.type === 'MANGA' ? 'Reading' : 'Streaming'}:** ${result.streaming_links.map((s) => markdownLink(s.language === null ? s.site : `${s.site} (${s.language})`, s.url)).join(', ')}`,
       );
     }
 
@@ -480,12 +480,12 @@ export const animeGetMedia = tool('anime_get_media', {
       lines.push(`**Studio detail:** ${studioDetail}`);
     }
 
-    // Streaming detail (url, subs, dubs, source)
+    // Link detail (url, language, subs, dubs, source)
     if (result.streaming_links.length) {
       const streamDetail = result.streaming_links
         .map(
           (s) =>
-            `${text(s.site)}(url:${markdownLink('stream', s.url)} subs:${s.subs.map(text).join(',')} dubs:${s.dubs.map(text).join(',')} src:${s.source})`,
+            `${text(s.site)}(url:${markdownLink('link', s.url)} language:${text(s.language ?? 'null')} subs:${s.subs.map(text).join(',')} dubs:${s.dubs.map(text).join(',')} src:${s.source})`,
         )
         .join(' | ');
       lines.push(`**Stream detail:** ${streamDetail}`);

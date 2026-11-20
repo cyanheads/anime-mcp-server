@@ -12,9 +12,11 @@ it('keeps the first usable row per normalized hostname, with Kitsu first', () =>
     site: 'YouTube',
     url: 'https://youtube.com/b',
     isDisabled: false,
+    language: 'Japanese',
   };
   expect(
     mergeStreamingLinks(
+      'ANIME',
       [
         netflix,
         { ...netflix, id: '2', url: 'https://netflix.com/b', dubs: ['en'] },
@@ -29,18 +31,34 @@ it('keeps the first usable row per normalized hostname, with Kitsu first', () =>
       ],
     ),
   ).toEqual([
-    { site: 'Netflix', url: netflix.url, subs: ['en'], dubs: ['ja'], source: 'kitsu' },
     {
-      site: 'constructor',
-      url: 'https://constructor/show',
+      site: 'Netflix',
+      url: netflix.url,
+      language: null,
       subs: ['en'],
       dubs: ['ja'],
       source: 'kitsu',
     },
-    { site: 'YouTube', url: youtube.url, subs: [], dubs: [], source: 'anilist' },
+    {
+      site: 'constructor',
+      url: 'https://constructor/show',
+      language: null,
+      subs: ['en'],
+      dubs: ['ja'],
+      source: 'kitsu',
+    },
+    {
+      site: 'YouTube',
+      url: youtube.url,
+      language: 'Japanese',
+      subs: [],
+      dubs: [],
+      source: 'anilist',
+    },
     {
       site: 'YouTube Music',
       url: 'https://music.youtube.com/d',
+      language: 'Japanese',
       subs: [],
       dubs: [],
       source: 'anilist',
@@ -49,9 +67,16 @@ it('keeps the first usable row per normalized hostname, with Kitsu first', () =>
 });
 
 it('skips unusable URLs and non-streaming records when Kitsu is absent', () => {
-  const link = { type: 'STREAMING', site: 'Hulu', url: 'https://hulu.com/a', isDisabled: false };
+  const link = {
+    type: 'STREAMING',
+    site: 'Hulu',
+    url: 'https://hulu.com/a',
+    isDisabled: false,
+    language: null,
+  };
   expect(
     mergeStreamingLinks(
+      'ANIME',
       [],
       [
         { ...link, url: null },
@@ -62,8 +87,10 @@ it('skips unusable URLs and non-streaming records when Kitsu is absent', () => {
         link,
       ],
     ),
-  ).toEqual([{ site: 'Hulu', url: link.url, subs: [], dubs: [], source: 'anilist' }]);
+  ).toEqual([
+    { site: 'Hulu', url: link.url, language: null, subs: [], dubs: [], source: 'anilist' },
+  ]);
   expect(
-    mergeStreamingLinks([{ id: '1', url: 'ftp://example.com/a', subs: [], dubs: [] }], []),
+    mergeStreamingLinks('ANIME', [{ id: '1', url: 'ftp://example.com/a', subs: [], dubs: [] }], []),
   ).toEqual([]);
 });

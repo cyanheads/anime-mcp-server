@@ -4,12 +4,12 @@
  */
 
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
-import { createWorkerHandler } from '@cyanheads/mcp-ts-core/worker';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { animeMediaResource } from '@/mcp-server/resources/definitions/anime-media.resource.js';
 import type { MediaDetail } from '@/services/anilist/types.js';
 import type { JikanMedia } from '@/services/jikan/types.js';
 import type { KitsuStreamingResult } from '@/services/kitsu/types.js';
+import { requestMediaResource } from '../helpers/request-media-resource.js';
 
 vi.mock('@/services/anilist/anilist-service.js');
 vi.mock('@/services/jikan/jikan-service.js');
@@ -167,41 +167,7 @@ describe('animeMediaResource', () => {
   });
 
   it('fills declared resource recovery through the real resource factory', async () => {
-    const worker = createWorkerHandler({
-      name: 'anime-mcp-server',
-      title: 'anime-mcp-server',
-      resources: [animeMediaResource],
-    });
-    const request = new Request('https://example.test/mcp', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json, text/event-stream',
-        'MCP-Protocol-Version': '2026-07-28',
-        'Mcp-Method': 'resources/read',
-        'Mcp-Name': 'anime://media/16498junk',
-      },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'resources/read',
-        params: {
-          uri: 'anime://media/16498junk',
-          _meta: {
-            'io.modelcontextprotocol/protocolVersion': '2026-07-28',
-            'io.modelcontextprotocol/clientCapabilities': {},
-          },
-        },
-      }),
-    });
-    const response = await worker.fetch(
-      request,
-      { MCP_AUTH_MODE: 'none', LOG_LEVEL: 'fatal' },
-      { waitUntil: vi.fn(), passThroughOnException: vi.fn(), props: {} },
-    );
-    const raw = await response.text();
-    const frame = raw.split('\n').find((line) => line.startsWith('data: '));
-    const payload = JSON.parse(frame ? frame.slice(6) : raw);
+    const payload = await requestMediaResource('anime://media/16498junk');
     expect(payload).toMatchObject({
       error: {
         code: -32007,
@@ -342,7 +308,7 @@ describe('animeMediaResource', () => {
   });
 
   it('skips Kitsu for manga type', async () => {
-    const mangaDetail = { ...mockDetail, type: 'MANGA' as const, idMal: 123 };
+    const mangaDetail = { ...mockDetail, type: 'MANGA' as const, idMal: 123, externalLinks: [] };
     vi.mocked(anilist.getMediaById).mockResolvedValue(mangaDetail);
     vi.mocked(jikan.getMediaFull).mockResolvedValue(null);
 
@@ -352,6 +318,8 @@ describe('animeMediaResource', () => {
 
     expect(vi.mocked(kitsu.getAnimeStreamingByMalId)).not.toHaveBeenCalled();
     expect(result.streaming_count).toBe(0);
+    expect(result.data_sources).toEqual({ anilist: true, mal: false, kitsu: false });
+    expect(result).not.toHaveProperty('notice');
   });
 
   it('handles sparse payload: all optional fields null', async () => {

@@ -275,7 +275,7 @@ export async function getMediaRelations(
     query GetRelations($id: Int) {
       Media(id: $id) {
         id
-        relations { edges { relationType node { ${MEDIA_NODE_FRAGMENT} } } }
+        relations { edges { relationType node { ${MEDIA_NODE_FRAGMENT} startDate { year month day } } } }
       }
     }
   `;
@@ -378,10 +378,11 @@ export async function getMediaCharacters(params: {
   page?: number | undefined;
   perPage?: number | undefined;
   signal?: AbortSignal | undefined;
-}): Promise<{ characters: CharacterEdge[]; hasNextPage: boolean } | null> {
+}): Promise<{ isAdult: boolean; characters: CharacterEdge[]; hasNextPage: boolean } | null> {
   const gql = `
     query GetCharacters($id: Int!, $language: StaffLanguage, $page: Int, $perPage: Int) {
       Media(id: $id) {
+        isAdult
         characters(page: $page, perPage: $perPage, sort: [ROLE, RELEVANCE]) {
           pageInfo { hasNextPage }
           edges {
@@ -409,6 +410,7 @@ export async function getMediaCharacters(params: {
   try {
     const data = await query<{
       Media: {
+        isAdult: boolean;
         characters: {
           pageInfo: { hasNextPage: boolean };
           edges: CharacterEdge[];
@@ -428,6 +430,7 @@ export async function getMediaCharacters(params: {
     if (!data.Media) return null;
 
     return {
+      isAdult: data.Media.isAdult,
       characters: data.Media.characters.edges,
       hasNextPage: data.Media.characters.pageInfo.hasNextPage,
     };
@@ -592,6 +595,7 @@ const suggestionPageSchema = z.object({
                       node: z
                         .object({
                           id: z.number().int().positive(),
+                          isAdult: z.boolean(),
                           title: z
                             .object({
                               romaji: optionalText,
@@ -628,7 +632,7 @@ async function searchPersonSuggestions(
           id
           name { full native }
           popularMedia: ${connection}(perPage: 1, sort: [POPULARITY_DESC]) {
-            edges { node { id title { romaji english native } } }
+            edges { node { id isAdult title { romaji english native } } }
           }
         }
       }
@@ -655,6 +659,7 @@ async function searchPersonSuggestions(
           popularMedia: node
             ? {
                 id: node.id,
+                isAdult: node.isAdult,
                 title: {
                   romaji: node.title?.romaji ?? null,
                   english: node.title?.english ?? null,

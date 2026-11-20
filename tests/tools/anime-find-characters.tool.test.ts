@@ -24,30 +24,32 @@ vi.mock('@/services/anilist/anilist-service.js');
 
 import * as anilist from '@/services/anilist/anilist-service.js';
 
-const mockCharacterEdges: { characters: CharacterEdge[]; hasNextPage: boolean } = {
-  characters: [
-    {
-      node: {
-        id: 40882,
-        name: { full: 'Okabe Rintarou', native: '岡部倫太郎' },
-        image: { large: 'https://example.com/okabe.jpg', medium: null },
-        description: null,
-        siteUrl: 'https://anilist.co/character/40882',
-      },
-      role: 'MAIN' as const,
-      voiceActors: [
-        {
-          id: 95061,
-          name: { full: 'Mamoru Miyano', native: '宮野真守' },
-          language: 'JAPANESE' as const,
-          image: { large: 'https://example.com/miyano.jpg', medium: null },
-          siteUrl: 'https://anilist.co/staff/95061',
+const mockCharacterEdges: { isAdult: boolean; characters: CharacterEdge[]; hasNextPage: boolean } =
+  {
+    isAdult: false,
+    characters: [
+      {
+        node: {
+          id: 40882,
+          name: { full: 'Okabe Rintarou', native: '岡部倫太郎' },
+          image: { large: 'https://example.com/okabe.jpg', medium: null },
+          description: null,
+          siteUrl: 'https://anilist.co/character/40882',
         },
-      ],
-    },
-  ],
-  hasNextPage: false,
-};
+        role: 'MAIN' as const,
+        voiceActors: [
+          {
+            id: 95061,
+            name: { full: 'Mamoru Miyano', native: '宮野真守' },
+            language: 'JAPANESE' as const,
+            image: { large: 'https://example.com/miyano.jpg', medium: null },
+            siteUrl: 'https://anilist.co/staff/95061',
+          },
+        ],
+      },
+    ],
+    hasNextPage: false,
+  };
 
 const mockMediaNode: MediaNode = {
   id: 11757,
@@ -66,6 +68,92 @@ const mockMediaNode: MediaNode = {
   title: { romaji: 'Steins;Gate', english: 'Steins;Gate', native: null },
   coverImage: null,
 };
+
+it('requires opt-in for the cast of an adult media root', async () => {
+  const adultCast = { ...mockCharacterEdges, isAdult: true };
+  vi.mocked(anilist.getMediaCharacters).mockResolvedValue(adultCast);
+  const rejected = await runToolContract(animeFindCharacters, { id: 8861 });
+  expect(rejected.structuredContent).toMatchObject({
+    error: {
+      data: {
+        reason: 'adult_content',
+        recovery: { hint: expect.stringContaining('include_adult') },
+      },
+    },
+  });
+  expect(JSON.stringify(rejected.content)).not.toContain('Okabe Rintarou');
+  const included = await runToolContract(animeFindCharacters, { id: 8861, include_adult: true });
+  expect(included.structuredContent).toMatchObject({ media_id: 8861 });
+  expectLiteralProse(included.content, 'Okabe Rintarou');
+});
+
+it('filters adult appearances and associated suggestion titles while preserving the people', async () => {
+  const edge = mockCharacterWithMedia.media.edges[0]!;
+  const adult = { ...edge.node, isAdult: true };
+  const popularMedia = { id: adult.id, isAdult: true, title: adult.title };
+  vi.mocked(anilist.searchCharacter).mockResolvedValue({
+    ...mockCharacterWithMedia,
+    media: { pageInfo: { currentPage: 2, hasNextPage: true }, edges: [{ ...edge, node: adult }] },
+  });
+  vi.mocked(anilist.searchCharacterSuggestions).mockResolvedValue({
+    hasNextPage: true,
+    matches: [{ id: 145, name: { full: 'Other', native: null }, popularMedia }],
+  });
+  const input = { character_name: 'Okabe', page: 2, per_page: 1 };
+  const hidden = await runToolContract(animeFindCharacters, input);
+  expect(hidden.structuredContent).toMatchObject({
+    has_next_page: true,
+    notice: expect.stringContaining('1 adult'),
+    characters: [{ character_id: 40882, media_title: null, voice_actors: [] }],
+    other_matches_has_next_page: true,
+    other_matches: [{ id: 145, media_id: null, media_title: null }],
+  });
+  expect(JSON.stringify(hidden.content)).not.toContain('Steins;Gate');
+  const included = await runToolContract(animeFindCharacters, { ...input, include_adult: true });
+  expect(included.structuredContent).toMatchObject({
+    characters: [{ media_id: adult.id, is_adult: true }],
+    other_matches: [{ id: 145, media_id: adult.id }],
+  });
+  expect(JSON.stringify(included.content)).toContain('is_adult:true');
+});
+
+it('keeps visible roles and pages adult roles only with opt-in', async () => {
+  const edge = mockStaffWithRoles.characterMedia.edges[0]!;
+  const adult = {
+    ...edge,
+    node: {
+      ...edge.node,
+      id: 8861,
+      isAdult: true,
+      title: { romaji: 'Adult Title', english: null, native: null },
+    },
+  };
+  vi.mocked(anilist.getStaffById).mockResolvedValue({
+    ...mockStaffWithRoles,
+    characterMedia: {
+      pageInfo: { hasNextPage: true, currentPage: 2 },
+      edges: [edge, adult],
+    },
+  });
+
+  const input = { voice_actor_id: 95061, page: 2, per_page: 2 };
+  const filtered = await runToolContract(animeFindCharacters, input);
+  expect(filtered.structuredContent).toMatchObject({
+    has_next_page: true,
+    notice: expect.stringContaining('1 adult voice role'),
+    voice_actor: { va_id: 95061, roles: [{ media_id: 11757, is_adult: false }] },
+  });
+  expectLiteralProse(filtered.content, '1 adult voice role');
+  expect(JSON.stringify(filtered.content)).not.toContain('Adult Title');
+
+  const optedIn = await runToolContract(animeFindCharacters, { ...input, include_adult: true });
+  expect(optedIn.structuredContent).toMatchObject({
+    has_next_page: true,
+    voice_actor: { roles: [{ media_id: 11757 }, { media_id: 8861, is_adult: true }] },
+  });
+  expectLiteralProse(optedIn.content, 'Adult Title');
+  expect(JSON.stringify(optedIn.content)).toContain('is_adult:true');
+});
 
 const mockCharacterWithMedia: CharacterWithMedia = {
   id: 40882,
@@ -145,6 +233,7 @@ describe('animeFindCharacters', () => {
     const [edge] = mockCharacterEdges.characters;
     assert(edge);
     vi.mocked(anilist.getMediaCharacters).mockResolvedValue({
+      isAdult: false,
       hasNextPage: false,
       characters: [
         {
@@ -227,7 +316,11 @@ describe('animeFindCharacters', () => {
         {
           id: 145,
           name,
-          popularMedia: { id: 20, title: { romaji: 'Naruto', english: null, native: null } },
+          popularMedia: {
+            id: 20,
+            isAdult: false,
+            title: { romaji: 'Naruto', english: null, native: null },
+          },
         },
         { id: 2671, name: { full: null, native: 'さくら' }, popularMedia: null },
       ],
@@ -467,7 +560,11 @@ describe('animeFindCharacters', () => {
     'full_text %s preserves empty cast and capped-page enrichment',
     async (full_text) => {
       for (const characters of [[], mockCharacterEdges.characters]) {
-        vi.mocked(anilist.getMediaCharacters).mockResolvedValue({ characters, hasNextPage: true });
+        vi.mocked(anilist.getMediaCharacters).mockResolvedValue({
+          isAdult: false,
+          characters,
+          hasNextPage: true,
+        });
         const result = await runToolContract(animeFindCharacters, {
           id: 11757,
           per_page: 1,
@@ -813,7 +910,7 @@ describe('animeFindCharacters tool contract', () => {
     });
     const capped = await runToolContract(animeFindCharacters, { id: 11757, per_page: 1 });
     const notice =
-      'More characters are available. Call anime_find_characters with page 2 and the same id, per_page, and language (if set) to continue.';
+      'More characters are available. Call anime_find_characters with page 2 and the same id, per_page, language, and include_adult values to continue.';
     expect(capped.structuredContent).toMatchObject({
       truncated: true,
       shown: 1,
@@ -829,6 +926,7 @@ describe('animeFindCharacters tool contract', () => {
 
   it('returns an uncapped empty page past the end', async () => {
     vi.mocked(anilist.getMediaCharacters).mockResolvedValue({
+      isAdult: false,
       characters: [],
       hasNextPage: false,
     });

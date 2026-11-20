@@ -221,7 +221,7 @@ describe('animeGetMedia', () => {
       ...mockDetail,
       externalLinks: [
         link,
-        { ...link, id: 2, site: 'Hulu', url: 'https://hulu.com/steins-gate' },
+        { ...link, id: 2, site: 'Hulu', url: 'https://hulu.com/steins-gate', language: 'English' },
         { ...link, id: 3, site: 'Disabled', url: 'https://disabled.example/a', isDisabled: true },
       ],
     });
@@ -229,16 +229,16 @@ describe('animeGetMedia', () => {
     const result = await runToolContract(animeGetMedia, { id: 11757 });
     expect(result.structuredContent).toMatchObject({
       streaming_links: [
-        { site: 'Crunchyroll', source: 'kitsu', subs: ['en'], dubs: ['en'] },
-        { site: 'Hulu', source: 'anilist', subs: [], dubs: [] },
+        { site: 'Crunchyroll', source: 'kitsu', subs: ['en'], dubs: ['en'], language: null },
+        { site: 'Hulu', source: 'anilist', subs: [], dubs: [], language: 'English' },
       ],
     });
     expect(JSON.stringify(result.content)).toContain('https://hulu.com/steins-gate');
     expect(JSON.stringify(result.content)).toContain(
-      'Crunchyroll(url:[stream](<https://crunchyroll.com/steins-gate>) subs:en dubs:en src:kitsu)',
+      'Crunchyroll(url:[link](<https://crunchyroll.com/steins-gate>) language:null subs:en dubs:en src:kitsu)',
     );
     expect(JSON.stringify(result.content)).toContain(
-      'Hulu(url:[stream](<https://hulu.com/steins-gate>) subs: dubs: src:anilist)',
+      'Hulu(url:[link](<https://hulu.com/steins-gate>) language:English subs: dubs: src:anilist)',
     );
     expect(JSON.stringify(result.content)).not.toContain('disabled.example');
   });
@@ -465,7 +465,7 @@ describe('animeGetMedia', () => {
   });
 
   it('skips Kitsu call for manga media type', async () => {
-    const mangaDetail = { ...mockDetail, type: 'MANGA' as const, idMal: 123 };
+    const mangaDetail = { ...mockDetail, type: 'MANGA' as const, idMal: 123, externalLinks: [] };
     vi.mocked(anilist.getMediaById).mockResolvedValue(mangaDetail);
     vi.mocked(jikan.getMediaFull).mockResolvedValue(null);
 
