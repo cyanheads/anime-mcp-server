@@ -1,6 +1,6 @@
 # anime-mcp-server - Directory Structure
 
-Generated on: 2026-11-13 16:30:21
+Generated on: 2026-11-20 22:04:44
 
 ```text
 anime-mcp-server/
@@ -29,6 +29,7 @@ anime-mcp-server/
 │   ├── 0.3.x/
 │   ├── 0.4.x/
 │   ├── 0.5.x/
+│   ├── 0.6.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md
@@ -181,7 +182,8 @@ anime-mcp-server/
 │   └── index.ts
 ├── tests/
 │   ├── helpers/
-│   │   └── markdown.ts
+│   │   ├── markdown.ts
+│   │   └── request-media-resource.ts
 │   ├── prompts/
 │   ├── resources/
 │   │   └── anime-media.resource.test.ts
@@ -196,10 +198,12 @@ anime-mcp-server/
 │   │   └── streaming-links.test.ts
 │   ├── tools/
 │   │   ├── anime-find-characters.tool.test.ts
+│   │   ├── anime-get-media.contract.test.ts
 │   │   ├── anime-get-media.tool.test.ts
 │   │   ├── anime-get-rankings.tool.test.ts
 │   │   ├── anime-get-recommendations.contract.test.ts
 │   │   ├── anime-get-recommendations.tool.test.ts
+│   │   ├── anime-get-relations.contract.test.ts
 │   │   ├── anime-get-relations.tool.test.ts
 │   │   ├── anime-get-schedule.tool.test.ts
 │   │   ├── anime-get-studio.tool.test.ts

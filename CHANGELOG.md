@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.6.0](changelog/0.6.x/0.6.0.md) — 2026-11-20 · ⚠️ Breaking
+
+Adult cast opt-in, release-date ordering for franchise entries, and language-specific manga reading links.
+
 ## [0.5.0](changelog/0.5.x/0.5.0.md) — 2026-11-13 · ⚠️ Breaking
 
 Find anime, manga, and people by more precise criteria, with predictable behavior when supplementary data is unavailable.
